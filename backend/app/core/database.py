@@ -44,6 +44,7 @@ def ensure_market_snapshot_schema() -> None:
         "chain_snapshot_time": "DATETIME",
         "underlying_last": "FLOAT",
         "chain_contract_count": "INTEGER",
+        "expiration_dates_json": "JSON",
         "nearest_expiration": "VARCHAR(16)",
         "atm_reference_price": "FLOAT",
         "near_atm_contracts_json": "JSON",

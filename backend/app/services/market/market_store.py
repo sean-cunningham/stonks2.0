@@ -42,10 +42,10 @@ class MarketStoreService:
 
     def refresh_spy(self) -> RefreshResponse:
         """Refresh quote and chain from broker and return status response."""
-        latest = self._repo.get_latest_snapshot("SPY")
         quote: UnderlyingQuoteNormalized | None = None
         chain: ChainSummaryNormalized | None = None
-        source_status = "ok"
+        quote_reason: str | None = None
+        chain_reason: str | None = None
         quote_ok = False
         chain_ok = False
 
@@ -53,55 +53,51 @@ class MarketStoreService:
             quote = self._market_data.fetch_spy_quote()
             quote_ok = True
         except (BrokerAuthError, MarketDataError) as exc:
-            source_status = str(exc)
-            logger.warning("SPY quote refresh failed: %s", source_status)
+            quote_reason = str(exc)
+            logger.warning("SPY quote refresh failed: reason=%s", quote_reason)
 
         reference_price = quote.mid if quote and quote.mid is not None else quote.last if quote else None
         try:
             chain = self._market_data.fetch_spy_option_chain(reference_price)
-            chain_ok = True
+            chain_ok = chain.quote_data_available
+            if not chain.quote_data_available:
+                chain_reason = "chain_quotes_unavailable"
         except (BrokerAuthError, MarketDataError) as exc:
-            source_status = str(exc)
-            logger.warning("SPY chain refresh failed: %s", source_status)
-
-        if latest is None:
-            base_snapshot_time = datetime.now(timezone.utc)
-        else:
-            base_snapshot_time = latest.snapshot_time
-
-        quote_time = quote.quote_timestamp if quote else base_snapshot_time
-        chain_time = chain.snapshot_timestamp if chain else latest.chain_snapshot_time if latest else None
+            chain_reason = str(exc)
+            logger.warning("SPY chain refresh failed: reason=%s", chain_reason)
 
         now = datetime.now(timezone.utc)
-        quote_age = max((now - quote_time).total_seconds(), 0.0) if quote_ok else None
+        source_status = self._build_source_status(
+            quote_ok=quote_ok,
+            chain_ok=chain_ok,
+            quote_reason=quote_reason,
+            chain_reason=chain_reason,
+        )
+
+        quote_time = quote.quote_timestamp if quote_ok and quote else None
+        chain_time = chain.snapshot_timestamp if chain_ok and chain else None
+        quote_age = max((now - quote_time).total_seconds(), 0.0) if quote_time else None
         chain_age = max((now - chain_time).total_seconds(), 0.0) if chain_ok and chain_time else None
 
         snapshot = self._repo.upsert_latest_snapshot(
             symbol="SPY",
-            snapshot_time=quote_time,
+            snapshot_time=quote_time or now,
             chain_snapshot_time=chain_time,
-            underlying_bid=quote.bid if quote else latest.underlying_bid if latest else None,
-            underlying_ask=quote.ask if quote else latest.underlying_ask if latest else None,
-            underlying_mid=quote.mid if quote else latest.underlying_mid if latest else None,
-            underlying_last=quote.last if quote else latest.underlying_last if latest else None,
+            underlying_bid=quote.bid if quote_ok and quote else None,
+            underlying_ask=quote.ask if quote_ok and quote else None,
+            underlying_mid=quote.mid if quote_ok and quote else None,
+            underlying_last=quote.last if quote_ok and quote else None,
             quote_age_seconds=quote_age,
             chain_age_seconds=chain_age,
-            chain_contract_count=(
-                chain.total_contracts_seen if chain else latest.chain_contract_count if latest else None
-            ),
-            nearest_expiration=(
-                chain.selected_expiration if chain else latest.nearest_expiration if latest else None
-            ),
-            atm_reference_price=(
-                chain.underlying_reference_price if chain else latest.atm_reference_price if latest else None
-            ),
-            near_atm_contracts_json=(
-                chain.near_atm_contracts if chain else latest.near_atm_contracts_json if latest else None
-            ),
+            chain_contract_count=chain.total_contracts_seen if chain_ok and chain else None,
+            expiration_dates_json=chain.expiration_dates_found if chain_ok and chain else None,
+            nearest_expiration=chain.selected_expiration if chain_ok and chain else None,
+            atm_reference_price=chain.underlying_reference_price if chain_ok and chain else None,
+            near_atm_contracts_json=chain.near_atm_contracts if chain_ok and chain else None,
             is_data_fresh=False,
-            data_source_status="ok" if quote_ok and chain_ok else source_status,
-            raw_quote_available=quote_ok or bool(latest.raw_quote_available if latest else False),
-            raw_chain_available=chain_ok or bool(latest.raw_chain_available if latest else False),
+            data_source_status=source_status,
+            raw_quote_available=quote_ok,
+            raw_chain_available=chain_ok,
         )
 
         readiness = compute_market_readiness(snapshot, self._settings, now)
@@ -152,11 +148,12 @@ class MarketStoreService:
                 underlying_symbol="SPY",
                 available=False,
                 degraded_reason=status.block_reason,
+                option_quotes_available=False,
                 source_status=status.source_status,
             )
 
         contracts = snapshot.near_atm_contracts_json or []
-        expirations = [snapshot.nearest_expiration] if snapshot.nearest_expiration else []
+        expirations = snapshot.expiration_dates_json or []
         return ChainLatestResponse(
             underlying_symbol=snapshot.symbol,
             available=True,
@@ -165,7 +162,24 @@ class MarketStoreService:
             selected_expiration=snapshot.nearest_expiration,
             underlying_reference_price=snapshot.atm_reference_price,
             total_contracts_seen=snapshot.chain_contract_count,
+            option_quotes_available=True,
             near_atm_contracts=contracts,
             source_status=snapshot.data_source_status,
         )
+
+    @staticmethod
+    def _build_source_status(
+        *,
+        quote_ok: bool,
+        chain_ok: bool,
+        quote_reason: str | None,
+        chain_reason: str | None,
+    ) -> str:
+        if quote_ok and chain_ok:
+            return "ok"
+        if quote_ok and not chain_ok:
+            return f"quote_ok_chain_failed:{chain_reason or 'unknown'}"
+        if chain_ok and not quote_ok:
+            return f"quote_failed_chain_ok:{quote_reason or 'unknown'}"
+        return f"quote_failed_chain_failed:{quote_reason or 'unknown'}|{chain_reason or 'unknown'}"
 

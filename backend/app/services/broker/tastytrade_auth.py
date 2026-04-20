@@ -22,6 +22,14 @@ class TastytradeToken:
     token_type: str = "Bearer"
 
 
+@dataclass
+class TastytradeQuoteToken:
+    """DXLink quote token payload."""
+
+    token: str
+    dxlink_url: str
+
+
 class TastytradeAuthService:
     """Handles Tastytrade OAuth refresh-token auth flow."""
 
@@ -71,4 +79,27 @@ class TastytradeAuthService:
 
         logger.info("Tastytrade auth success")
         return TastytradeToken(access_token=access_token, token_type="Bearer")
+
+    def get_quote_token(self, access_token: str) -> TastytradeQuoteToken:
+        """Fetch DXLink quote token and websocket URL."""
+        if not self._settings.TASTYTRADE_API_BASE_URL:
+            raise BrokerAuthError("missing_credentials")
+        url = f"{self._settings.TASTYTRADE_API_BASE_URL.rstrip('/')}/api-quote-tokens"
+        headers = {"Authorization": f"Bearer {access_token}"}
+        try:
+            with httpx.Client(timeout=15.0, headers=headers) as client:
+                response = client.get(url)
+                response.raise_for_status()
+                body = response.json()
+        except httpx.HTTPError as exc:
+            logger.warning("Tastytrade quote-token request failed: %s", exc)
+            raise BrokerAuthError("broker_error") from exc
+
+        data = body.get("data", {}) if isinstance(body, dict) else {}
+        token = data.get("token")
+        dxlink_url = data.get("dxlink-url")
+        if not token or not dxlink_url:
+            logger.warning("Quote-token response missing token or dxlink-url")
+            raise BrokerAuthError("broker_error")
+        return TastytradeQuoteToken(token=token, dxlink_url=dxlink_url)
 

@@ -59,8 +59,12 @@ def compute_market_readiness(
     quote_available = bool(snapshot.raw_quote_available)
     chain_available = bool(snapshot.raw_chain_available)
 
-    if snapshot.data_source_status == "missing_credentials":
+    if snapshot.data_source_status.startswith("quote_failed_chain_failed:missing_credentials"):
         reason = "missing_credentials"
+    elif snapshot.data_source_status.startswith("quote_ok_chain_failed:"):
+        reason = "chain_unavailable"
+    elif snapshot.data_source_status.startswith("quote_failed_chain_ok:"):
+        reason = "quote_unavailable"
     elif not quote_available and not chain_available:
         reason = "broker_error" if snapshot.data_source_status == "broker_error" else "quote_unavailable"
     elif not quote_available:
@@ -85,8 +89,8 @@ def compute_market_readiness(
         chain_age_seconds=chain_age,
         quote_is_fresh=quote_fresh,
         chain_is_fresh=chain_fresh,
-        latest_quote_time=snapshot.snapshot_time,
-        latest_chain_time=snapshot.chain_snapshot_time,
+        latest_quote_time=snapshot.snapshot_time if quote_available else None,
+        latest_chain_time=snapshot.chain_snapshot_time if chain_available else None,
         source_status=snapshot.data_source_status,
     )
 

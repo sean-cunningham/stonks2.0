@@ -65,6 +65,7 @@ class ChainLatestResponse(BaseModel):
     selected_expiration: str | None = None
     underlying_reference_price: float | None = None
     total_contracts_seen: int | None = None
+    option_quotes_available: bool = False
     near_atm_contracts: list[NearAtmContract] = Field(default_factory=list)
     source_status: str
 

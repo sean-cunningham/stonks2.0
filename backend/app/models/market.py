@@ -22,6 +22,7 @@ class MarketSnapshot(Base):
     quote_age_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     chain_age_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     chain_contract_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expiration_dates_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     nearest_expiration: Mapped[str | None] = mapped_column(String(16), nullable=True)
     atm_reference_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     near_atm_contracts_json: Mapped[list[dict] | None] = mapped_column(JSON, nullable=True)
