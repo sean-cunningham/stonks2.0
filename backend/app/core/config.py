@@ -1,8 +1,13 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+BASE_DIR = Path(__file__).resolve().parents[2]
+DEFAULT_SQLITE_PATH = (BASE_DIR / "stonks2.db").as_posix()
 
 
 class Settings(BaseSettings):
@@ -13,7 +18,7 @@ class Settings(BaseSettings):
     APP_MODE: Literal["paper", "mock"] = "paper"
     API_HOST: str = "127.0.0.1"
     API_PORT: int = 8000
-    DATABASE_URL: str = "sqlite:///./stonks2.db"
+    DATABASE_URL: str = f"sqlite:///{DEFAULT_SQLITE_PATH}"
     LOG_LEVEL: str = "INFO"
 
     # Tastytrade placeholders for future integration only.
@@ -28,7 +33,7 @@ class Settings(BaseSettings):
     MARKET_CHAIN_REFRESH_SECONDS: int = 30
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(BASE_DIR / ".env"),
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
