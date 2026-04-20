@@ -32,6 +32,16 @@ class Settings(BaseSettings):
     MARKET_CHAIN_MAX_AGE_SECONDS: int = 60
     MARKET_CHAIN_REFRESH_SECONDS: int = 30
 
+    # SPY intraday context (1m / 5m bars)
+    SPY_INTRADAY_BARS_SOURCE: Literal["auto", "tastytrade", "yahoo"] = "auto"
+    OPENING_RANGE_MINUTES: int = 30
+    CONTEXT_BAR_MAX_STALENESS_SECONDS_1M: int = 120
+    CONTEXT_BAR_MAX_STALENESS_SECONDS_5M: int = 300
+    CONTEXT_STARTUP_REFRESH: bool = False
+    CONTEXT_MAX_BARS_PERSISTED_PER_TF: int = 600
+    SPY_YAHOO_CHART_RANGE: str = "5d"
+    YAHOO_CHART_USER_AGENT: str = "Mozilla/5.0 (compatible; stonks2-context/1.0)"
+
     model_config = SettingsConfigDict(
         env_file=str(BASE_DIR / ".env"),
         env_file_encoding="utf-8",

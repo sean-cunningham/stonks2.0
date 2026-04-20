@@ -3,18 +3,20 @@ import logging
 from fastapi import Depends, FastAPI
 from sqlalchemy.orm import Session
 
+from app.api.context import router as context_router
 from app.api.health import get_health
 from app.api.market import router as market_router
 from app.api.system import get_config, get_status, get_strategies
 from app.core.config import get_settings
 from app.core.database import Base, check_database_connectivity, engine, ensure_market_snapshot_schema, get_db
 from app.core.logging import configure_logging
+from app.jobs.context_refresh import run_startup_context_refresh
 from app.jobs.market_refresh import run_startup_market_refresh
 from app.schemas.health import HealthResponse
 from app.schemas.system import ConfigResponse, StrategiesResponse, SystemStatusResponse
 
 # Import models so SQLAlchemy metadata includes all tables on startup.
-from app.models import journal, market, strategy, trade  # noqa: F401
+from app.models import bars, journal, market, strategy, trade  # noqa: F401
 
 settings = get_settings()
 configure_logging(settings.LOG_LEVEL)
@@ -22,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title=settings.APP_NAME)
 app.include_router(market_router)
+app.include_router(context_router)
 
 
 @app.on_event("startup")
@@ -34,6 +37,7 @@ def on_startup() -> None:
     logger.info("Environment=%s mode=%s", settings.APP_ENV, settings.APP_MODE)
     logger.info("Database connectivity=%s", db_ok)
     run_startup_market_refresh(settings)
+    run_startup_context_refresh(settings)
     logger.info("Strategy execution and paper execution layers are not implemented yet.")
 
 

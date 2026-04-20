@@ -1,0 +1,143 @@
+"""Orchestration for SPY intraday context API (bars + metrics + readiness)."""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+
+from sqlalchemy.orm import Session
+
+from app.core.config import Settings
+from app.repositories.bars_repository import BarsRepository
+from app.schemas.bars import BarListResponse, BarRow
+from app.schemas.context import ContextRefreshResponse, ContextStatusResponse, ContextSummaryResponse
+from app.services.market import bar_ingestion, context_calculator, context_status
+
+logger = logging.getLogger(__name__)
+
+
+class ContextService:
+    """Read/write SPY context state backed by IntradayBar rows."""
+
+    def __init__(self, db: Session, settings: Settings) -> None:
+        self._db = db
+        self._settings = settings
+        self._bars = BarsRepository(db)
+
+    def _load_bars(self, limit: int = 120) -> tuple[list, list]:
+        one = self._bars.list_recent_bars(symbol="SPY", timeframe="1m", limit=limit)
+        five = self._bars.list_recent_bars(symbol="SPY", timeframe="5m", limit=limit)
+        return one, five
+
+    def get_status(self) -> ContextStatusResponse:
+        bars_1m, bars_5m = self._load_bars()
+        readiness = context_status.evaluate_context_readiness(
+            bars_1m=bars_1m,
+            bars_5m=bars_5m,
+            settings=self._settings,
+        )
+        source = context_calculator.bars_source_from_rows(bars_1m or bars_5m)
+        return ContextStatusResponse(
+            symbol="SPY",
+            context_ready=readiness.context_ready,
+            block_reason=readiness.block_reason,
+            latest_1m_bar_time=readiness.latest_1m_bar_time,
+            latest_5m_bar_time=readiness.latest_5m_bar_time,
+            bars_1m_available=readiness.bars_1m_available,
+            bars_5m_available=readiness.bars_5m_available,
+            vwap_available=readiness.vwap_available,
+            opening_range_available=readiness.opening_range_available,
+            atr_available=readiness.atr_available,
+            source_status="ok" if readiness.context_ready else "degraded",
+            bars_source=source,
+        )
+
+    def get_bars_1m(self) -> BarListResponse:
+        bars = self._bars.list_recent_bars(symbol="SPY", timeframe="1m", limit=120)
+        return self._to_bar_list(bars, "1m")
+
+    def get_bars_5m(self) -> BarListResponse:
+        bars = self._bars.list_recent_bars(symbol="SPY", timeframe="5m", limit=120)
+        return self._to_bar_list(bars, "5m")
+
+    def _to_bar_list(self, bars: list, timeframe: str) -> BarListResponse:
+        source = context_calculator.bars_source_from_rows(bars)
+        return BarListResponse(
+            symbol="SPY",
+            timeframe=timeframe,
+            bars=[
+                BarRow(
+                    symbol=b.symbol,
+                    timeframe=b.timeframe,
+                    bar_time=b.bar_time,
+                    open=b.open,
+                    high=b.high,
+                    low=b.low,
+                    close=b.close,
+                    volume=b.volume,
+                    source_status=b.source_status,
+                )
+                for b in bars
+            ],
+            bars_source=source,
+            fetched_at=datetime.now(timezone.utc),
+        )
+
+    def get_summary(self) -> ContextSummaryResponse:
+        bars_1m, bars_5m = self._load_bars()
+        readiness = context_status.evaluate_context_readiness(
+            bars_1m=bars_1m,
+            bars_5m=bars_5m,
+            settings=self._settings,
+        )
+        metrics = context_calculator.compute_context_metrics(
+            bars_1m=bars_1m,
+            bars_5m=bars_5m,
+            now=datetime.now(timezone.utc),
+            opening_range_minutes=self._settings.OPENING_RANGE_MINUTES,
+        )
+        source = context_calculator.bars_source_from_rows(bars_1m or bars_5m)
+        return ContextSummaryResponse(
+            symbol="SPY",
+            latest_price=metrics.latest_price,
+            session_vwap=metrics.session_vwap if readiness.context_ready else None,
+            opening_range_high=metrics.opening_range_high if readiness.context_ready else None,
+            opening_range_low=metrics.opening_range_low if readiness.context_ready else None,
+            latest_5m_atr=metrics.latest_5m_atr if readiness.context_ready else None,
+            recent_swing_high=metrics.recent_swing_high if readiness.context_ready else None,
+            recent_swing_low=metrics.recent_swing_low if readiness.context_ready else None,
+            relative_volume_5m=(
+                metrics.relative_volume_5m if readiness.context_ready and metrics.relative_volume_available else None
+            ),
+            relative_volume_available=bool(readiness.context_ready and metrics.relative_volume_available),
+            latest_1m_bar_time=readiness.latest_1m_bar_time,
+            latest_5m_bar_time=readiness.latest_5m_bar_time,
+            context_ready=readiness.context_ready,
+            block_reason=readiness.block_reason,
+            source_status="ok" if readiness.context_ready else "degraded",
+            bars_source=source,
+        )
+
+    def refresh(self) -> ContextRefreshResponse:
+        """Fetch bars, persist, recompute readiness and summary."""
+        try:
+            n1, n5, src = bar_ingestion.ingest_spy_intraday(self._db, self._settings)
+            refreshed = n1 > 0 and n5 > 0
+        except bar_ingestion.BarIngestionError as exc:
+            logger.warning("Context refresh failed: %s", exc)
+            n1, n5, src = 0, 0, f"failed:{exc}"
+            refreshed = False
+
+        status = self.get_status()
+        summary = self.get_summary()
+        # Reflect actual provider on summary/status when ingest succeeded
+        if refreshed:
+            summary = summary.model_copy(update={"bars_source": src, "source_status": status.source_status})
+            status = status.model_copy(update={"bars_source": src})
+        return ContextRefreshResponse(
+            refreshed=refreshed,
+            bars_1m_written=n1,
+            bars_5m_written=n5,
+            status=status,
+            summary=summary,
+        )
