@@ -1,4 +1,4 @@
-﻿from collections.abc import Generator
+from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -33,3 +33,24 @@ def check_database_connectivity() -> bool:
         return True
     except Exception:
         return False
+
+
+def ensure_market_snapshot_schema() -> None:
+    """Backfill additive columns for local SQLite scaffold updates."""
+    if not settings.DATABASE_URL.startswith("sqlite"):
+        return
+
+    expected_columns: dict[str, str] = {
+        "chain_snapshot_time": "DATETIME",
+        "underlying_last": "FLOAT",
+        "chain_contract_count": "INTEGER",
+        "nearest_expiration": "VARCHAR(16)",
+        "atm_reference_price": "FLOAT",
+        "near_atm_contracts_json": "JSON",
+    }
+    with engine.begin() as connection:
+        existing_rows = connection.execute(text("PRAGMA table_info(market_snapshots)")).fetchall()
+        existing = {row[1] for row in existing_rows}
+        for column, ddl_type in expected_columns.items():
+            if column not in existing:
+                connection.execute(text(f"ALTER TABLE market_snapshots ADD COLUMN {column} {ddl_type}"))

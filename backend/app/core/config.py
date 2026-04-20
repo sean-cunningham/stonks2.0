@@ -1,4 +1,4 @@
-﻿from functools import lru_cache
+from functools import lru_cache
 from typing import Literal, Optional
 
 from pydantic import Field
@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     TASTYTRADE_ACCOUNT_NUMBER: Optional[str] = Field(default=None)
     TASTYTRADE_API_BASE_URL: Optional[str] = Field(default=None)
     TASTYTRADE_DX_URL: Optional[str] = Field(default=None)
+    MARKET_QUOTE_MAX_AGE_SECONDS: int = 15
+    MARKET_CHAIN_MAX_AGE_SECONDS: int = 60
+    MARKET_CHAIN_REFRESH_SECONDS: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",
