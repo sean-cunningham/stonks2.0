@@ -43,6 +43,10 @@ class StrategyOneEvalInput:
     chain_selected_expiration: str | None
     underlying_reference_price: float | None
     near_atm_contracts: list[NearAtmContract]
+    quote_timestamp_used: datetime | None = None
+    quote_age_seconds: float | None = None
+    quote_freshness_threshold_seconds: int = 15
+    quote_stale: bool = True
 
     @classmethod
     def from_api(
@@ -52,7 +56,9 @@ class StrategyOneEvalInput:
         summary: ContextSummaryResponse,
         market: MarketStatusResponse,
         chain: ChainLatestResponse,
+        quote_freshness_threshold_seconds: int = 15,
     ) -> StrategyOneEvalInput:
+        quote_stale = (not market.quote_is_fresh) if market.quote_available else True
         return cls(
             us_equity_rth_open=status.us_equity_rth_open,
             context_ready_for_live_trading=status.context_ready_for_live_trading,
@@ -71,6 +77,10 @@ class StrategyOneEvalInput:
             chain_selected_expiration=chain.selected_expiration,
             underlying_reference_price=chain.underlying_reference_price,
             near_atm_contracts=list(chain.near_atm_contracts),
+            quote_timestamp_used=market.latest_quote_time,
+            quote_age_seconds=market.quote_age_seconds,
+            quote_freshness_threshold_seconds=quote_freshness_threshold_seconds,
+            quote_stale=quote_stale,
         )
 
 
@@ -92,6 +102,10 @@ def _snapshot(inp: StrategyOneEvalInput) -> StrategyOneContextSnapshot:
         chain_option_quotes_available=inp.chain_option_quotes_available,
         chain_selected_expiration=inp.chain_selected_expiration,
         underlying_reference_price=inp.underlying_reference_price,
+        quote_timestamp_used=inp.quote_timestamp_used,
+        quote_age_seconds=inp.quote_age_seconds,
+        quote_freshness_threshold_seconds=inp.quote_freshness_threshold_seconds,
+        quote_stale=inp.quote_stale,
     )
 
 

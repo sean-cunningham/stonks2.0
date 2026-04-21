@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
+from typing import Literal
 
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,18 @@ class RefreshResult:
     quote_refreshed: bool
     chain_refreshed: bool
     source_status: str
+
+
+@dataclass(frozen=True)
+class SpyMarketEvaluationResolution:
+    """Market readiness for one strategy evaluation pass (observable auto-refresh)."""
+
+    final_status: MarketStatusResponse
+    market_status_source: Literal["cached", "refreshed_for_evaluation"]
+    auto_refresh_attempted: bool
+    auto_refresh_trigger_reason: str | None
+    post_refresh_market_ready: bool
+    post_refresh_block_reason: str
 
 
 class MarketStoreService:
@@ -116,6 +129,51 @@ class MarketStoreService:
         snapshot = self._repo.get_latest_snapshot("SPY")
         readiness = compute_market_readiness(snapshot, self._settings)
         return MarketStatusResponse(**readiness.__dict__)
+
+    def resolve_spy_market_for_evaluation(self) -> SpyMarketEvaluationResolution:
+        """Resolve market readiness for strategy evaluation; refresh once if cache is stale.
+
+        ``get_spy_status`` uses wall-clock age of the last persisted snapshot. Without a
+        periodic refresh job, snapshots only update at startup or manual POST /refresh,
+        so they can exceed MARKET_QUOTE_MAX_AGE_SECONDS even when the feed is healthy.
+
+        After ``refresh_spy`` commits a new row, expire ORM state so the follow-up read
+        does not reuse a stale ``MarketSnapshot`` instance from this session's identity map.
+        """
+        pre = self.get_spy_status()
+        if pre.market_ready:
+            return SpyMarketEvaluationResolution(
+                final_status=pre,
+                market_status_source="cached",
+                auto_refresh_attempted=False,
+                auto_refresh_trigger_reason=None,
+                post_refresh_market_ready=pre.market_ready,
+                post_refresh_block_reason=pre.block_reason,
+            )
+        if pre.block_reason in ("stale_quote", "stale_chain", "startup_not_initialized"):
+            self.refresh_spy()
+            self._db.expire_all()
+            post = self.get_spy_status()
+            return SpyMarketEvaluationResolution(
+                final_status=post,
+                market_status_source="refreshed_for_evaluation",
+                auto_refresh_attempted=True,
+                auto_refresh_trigger_reason=pre.block_reason,
+                post_refresh_market_ready=post.market_ready,
+                post_refresh_block_reason=post.block_reason,
+            )
+        return SpyMarketEvaluationResolution(
+            final_status=pre,
+            market_status_source="cached",
+            auto_refresh_attempted=False,
+            auto_refresh_trigger_reason=None,
+            post_refresh_market_ready=pre.market_ready,
+            post_refresh_block_reason=pre.block_reason,
+        )
+
+    def get_spy_status_for_evaluation(self) -> MarketStatusResponse:
+        """Backward-compatible: final market row after optional evaluation-time refresh."""
+        return self.resolve_spy_market_for_evaluation().final_status
 
     def get_latest_quote(self) -> QuoteLatestResponse:
         """Return latest normalized quote or degraded unavailable response."""

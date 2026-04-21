@@ -297,5 +297,73 @@ class StrategyOneEvaluationTests(unittest.TestCase):
         self.assertEqual(out.decision, "no_trade")
         self.assertTrue(any("contract" in b.lower() for b in out.blockers))
 
+    def test_stale_quote_blocks_with_market_not_ready(self) -> None:
+        stale_market = MarketStatusResponse(
+            symbol="SPY",
+            market_ready=False,
+            block_reason="stale_quote",
+            quote_available=True,
+            chain_available=True,
+            quote_age_seconds=120.0,
+            chain_age_seconds=1.0,
+            quote_is_fresh=False,
+            chain_is_fresh=True,
+            latest_quote_time=datetime(2026, 4, 21, 16, 0, 0, tzinfo=timezone.utc),
+            latest_chain_time=datetime.now(timezone.utc),
+            source_status="ok",
+        )
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(),
+            summary=_summary(px=510.0, vwap=505.0, orh=508.0, orl=502.0, atr=1.5, swing_h=506.0, swing_l=500.0),
+            market=stale_market,
+            chain=_chain(contracts=[_good_call()]),
+        )
+        out = evaluate_strategy_one_spy(inp)
+        self.assertEqual(out.decision, "no_trade")
+        self.assertIn("market_not_ready:stale_quote", out.blockers)
+
+    def test_healthy_context_and_market_no_stale_quote_blocker(self) -> None:
+        """Live context + fresh market should not emit a stale_quote market blocker."""
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(),
+            summary=_summary(px=510.0, vwap=505.0, orh=508.0, orl=502.0, atr=1.5, swing_h=506.0, swing_l=500.0),
+            market=_market(),
+            chain=_chain(contracts=[_good_call(strike=500.0), _good_put()]),
+        )
+        out = evaluate_strategy_one_spy(inp)
+        self.assertFalse(any("stale_quote" in b for b in out.blockers))
+
+    def test_evaluation_snapshot_includes_quote_freshness_debug(self) -> None:
+        qt = datetime(2026, 4, 21, 17, 30, 0, tzinfo=timezone.utc)
+        m = MarketStatusResponse(
+            symbol="SPY",
+            market_ready=True,
+            block_reason="none",
+            quote_available=True,
+            chain_available=True,
+            quote_age_seconds=3.5,
+            chain_age_seconds=2.0,
+            quote_is_fresh=True,
+            chain_is_fresh=True,
+            latest_quote_time=qt,
+            latest_chain_time=datetime.now(timezone.utc),
+            source_status="ok",
+        )
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(),
+            summary=_summary(px=510.0, vwap=505.0, orh=508.0, orl=502.0, atr=1.5, swing_h=506.0, swing_l=500.0),
+            market=m,
+            chain=_chain(contracts=[_good_call(strike=500.0)]),
+            quote_freshness_threshold_seconds=15,
+        )
+        out = evaluate_strategy_one_spy(inp)
+        snap = out.context_snapshot_used
+        self.assertEqual(snap.quote_timestamp_used, qt)
+        self.assertEqual(snap.quote_age_seconds, 3.5)
+        self.assertEqual(snap.quote_freshness_threshold_seconds, 15)
+        self.assertIs(snap.quote_stale, False)
+        self.assertTrue(snap.market_ready)
+
+
 if __name__ == "__main__":
     unittest.main()
