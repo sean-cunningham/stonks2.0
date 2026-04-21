@@ -150,7 +150,15 @@ def evaluate_context_readiness(
             atr_available=atr,
         )
 
-    if not (dxlink.connected and dxlink.subscribed):
+    b1 = _dxlink_bars_only(bars_1m)
+    b5 = _dxlink_bars_only(bars_5m)
+
+    latest_1m = _as_utc_aware(b1[-1].bar_time) if b1 else None
+    latest_5m = _as_utc_aware(b5[-1].bar_time) if b5 else None
+    latest_session = context_calculator.session_date_et(latest_1m) if latest_1m else None
+
+    # If we have no persisted DXLink bars at all, report connectivity first when disconnected.
+    if not b1 and not b5 and not (dxlink.connected and dxlink.subscribed):
         return _readiness(
             live=False,
             analysis=False,
@@ -166,18 +174,27 @@ def evaluate_context_readiness(
             session_day=None,
         )
 
-    b1 = _dxlink_bars_only(bars_1m)
-    b5 = _dxlink_bars_only(bars_5m)
-
-    latest_1m = _as_utc_aware(b1[-1].bar_time) if b1 else None
-    latest_5m = _as_utc_aware(b5[-1].bar_time) if b5 else None
-    latest_session = context_calculator.session_date_et(latest_1m) if latest_1m else None
-
     age_1m = (current - latest_1m).total_seconds() if latest_1m else None
     age_5m = (current - latest_5m).total_seconds() if latest_5m else None
     stale_1m = age_1m is None or age_1m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_1M
     stale_5m = age_5m is None or age_5m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_5M
 
+    # During RTH, live readiness remains strict and stream connectivity matters.
+    if rth_open and not (dxlink.connected and dxlink.subscribed):
+        return _readiness(
+            live=False,
+            analysis=False,
+            block="dxlink_not_connected",
+            block_a="dxlink_not_connected",
+            latest_1m=latest_1m,
+            latest_5m=latest_5m,
+            b1a=bool(b1),
+            b5a=bool(b5),
+            vwap=False,
+            ora=False,
+            atr=False,
+            session_day=latest_session,
+        )
     if rth_open and stale_1m:
         return _readiness(
             live=False,
@@ -227,7 +244,13 @@ def evaluate_context_readiness(
     if analysis_ready and not rth_open:
         block_analysis = "latest_session_complete"
 
-    live_ready = bool(rth_open and analysis_ready and block_analysis in ("none", "latest_session_complete"))
+    live_ready = bool(
+        rth_open
+        and analysis_ready
+        and block_analysis in ("none", "latest_session_complete")
+        and dxlink.connected
+        and dxlink.subscribed
+    )
 
     if not analysis_ready:
         return _readiness(
