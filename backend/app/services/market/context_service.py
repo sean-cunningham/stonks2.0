@@ -54,10 +54,16 @@ class ContextService:
             dxlink=self._dxlink_health(),
         )
         source = self._bars_source_label(bars_1m, bars_5m)
+        analysis_ok = readiness.context_ready_for_analysis
         return ContextStatusResponse(
             symbol="SPY",
+            us_equity_rth_open=readiness.us_equity_rth_open,
+            context_ready_for_live_trading=readiness.context_ready_for_live_trading,
+            context_ready_for_analysis=readiness.context_ready_for_analysis,
             context_ready=readiness.context_ready,
             block_reason=readiness.block_reason,
+            block_reason_analysis=readiness.block_reason_analysis,
+            latest_session_date_et=readiness.latest_session_date_et,
             latest_1m_bar_time=readiness.latest_1m_bar_time,
             latest_5m_bar_time=readiness.latest_5m_bar_time,
             bars_1m_available=readiness.bars_1m_available,
@@ -65,7 +71,7 @@ class ContextService:
             vwap_available=readiness.vwap_available,
             opening_range_available=readiness.opening_range_available,
             atr_available=readiness.atr_available,
-            source_status="ok" if readiness.context_ready else "degraded",
+            source_status="ok" if analysis_ok else "degraded",
             bars_source=source,
         )
 
@@ -118,24 +124,30 @@ class ContextService:
             opening_range_minutes=self._settings.OPENING_RANGE_MINUTES,
         )
         source = self._bars_source_label(bars_1m, bars_5m)
+        analysis_ok = readiness.context_ready_for_analysis
         return ContextSummaryResponse(
             symbol="SPY",
+            us_equity_rth_open=readiness.us_equity_rth_open,
+            context_ready_for_live_trading=readiness.context_ready_for_live_trading,
+            context_ready_for_analysis=readiness.context_ready_for_analysis,
             latest_price=metrics.latest_price,
-            session_vwap=metrics.session_vwap if readiness.context_ready else None,
-            opening_range_high=metrics.opening_range_high if readiness.context_ready else None,
-            opening_range_low=metrics.opening_range_low if readiness.context_ready else None,
-            latest_5m_atr=metrics.latest_5m_atr if readiness.context_ready else None,
-            recent_swing_high=metrics.recent_swing_high if readiness.context_ready else None,
-            recent_swing_low=metrics.recent_swing_low if readiness.context_ready else None,
+            session_vwap=metrics.session_vwap if analysis_ok else None,
+            opening_range_high=metrics.opening_range_high if analysis_ok else None,
+            opening_range_low=metrics.opening_range_low if analysis_ok else None,
+            latest_5m_atr=metrics.latest_5m_atr if analysis_ok else None,
+            recent_swing_high=metrics.recent_swing_high if analysis_ok else None,
+            recent_swing_low=metrics.recent_swing_low if analysis_ok else None,
             relative_volume_5m=(
-                metrics.relative_volume_5m if readiness.context_ready and metrics.relative_volume_available else None
+                metrics.relative_volume_5m if analysis_ok and metrics.relative_volume_available else None
             ),
-            relative_volume_available=bool(readiness.context_ready and metrics.relative_volume_available),
+            relative_volume_available=bool(analysis_ok and metrics.relative_volume_available),
             latest_1m_bar_time=readiness.latest_1m_bar_time,
             latest_5m_bar_time=readiness.latest_5m_bar_time,
+            latest_session_date_et=readiness.latest_session_date_et,
             context_ready=readiness.context_ready,
             block_reason=readiness.block_reason,
-            source_status="ok" if readiness.context_ready else "degraded",
+            block_reason_analysis=readiness.block_reason_analysis,
+            source_status="ok" if analysis_ok else "degraded",
             bars_source=source,
         )
 

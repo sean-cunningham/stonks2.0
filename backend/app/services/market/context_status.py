@@ -1,15 +1,16 @@
-"""Context readiness from persisted DXLink bars, stream health, and freshness rules."""
+"""Context readiness from persisted DXLink bars, stream health, and session-aware freshness."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from app.core.config import Settings
 from app.models.bars import IntradayBar
 from app.services.broker.dxlink_spy_candle_streamer import DxLinkHealthSnapshot
 from app.services.market import context_calculator
 from app.services.market.bar_aggregate import DXLINK_BAR_SOURCE
+from app.services.market.session_clock import expected_context_session_date_et, is_us_equity_rth_open
 
 
 def _as_utc_aware(dt: datetime | None) -> datetime | None:
@@ -26,10 +27,15 @@ def _dxlink_bars_only(bars: list[IntradayBar]) -> list[IntradayBar]:
 
 @dataclass
 class ContextReadiness:
-    """Boolean readiness flags and human-readable block reason."""
+    """Session-aware readiness for live trading vs post-close analysis."""
 
+    us_equity_rth_open: bool
+    context_ready_for_live_trading: bool
+    context_ready_for_analysis: bool
     context_ready: bool
     block_reason: str
+    block_reason_analysis: str
+    latest_session_date_et: date | None
     latest_1m_bar_time: datetime | None
     latest_5m_bar_time: datetime | None
     bars_1m_available: bool
@@ -39,119 +45,38 @@ class ContextReadiness:
     atr_available: bool
 
 
-def evaluate_context_readiness(
+def _metrics_reason_and_flags(
     *,
-    bars_1m: list[IntradayBar],
-    bars_5m: list[IntradayBar],
+    b1: list[IntradayBar],
+    b5: list[IntradayBar],
+    latest_1m: datetime | None,
+    latest_5m: datetime | None,
     settings: Settings,
-    dxlink: DxLinkHealthSnapshot,
-    now: datetime | None = None,
-) -> ContextReadiness:
-    """Fail closed with explicit reasons when DXLink or context data is insufficient."""
-    current = now or datetime.now(timezone.utc)
+    current: datetime,
+) -> tuple[str, bool, bool, bool, bool, bool]:
+    """
+    Returns (analysis_block_reason, bars_1m_ok, bars_5m_ok, vwap_ok, or_ok, atr_ok).
 
-    if not (dxlink.connected and dxlink.subscribed):
-        return ContextReadiness(
-            context_ready=False,
-            block_reason="dxlink_not_connected",
-            latest_1m_bar_time=None,
-            latest_5m_bar_time=None,
-            bars_1m_available=False,
-            bars_5m_available=False,
-            vwap_available=False,
-            opening_range_available=False,
-            atr_available=False,
-        )
-
-    b1 = _dxlink_bars_only(bars_1m)
-    b5 = _dxlink_bars_only(bars_5m)
-
-    latest_1m = _as_utc_aware(b1[-1].bar_time) if b1 else None
-    latest_5m = _as_utc_aware(b5[-1].bar_time) if b5 else None
-
+    analysis_block_reason is 'none' when analysis metrics are computable on the anchor session.
+    """
     if not b1:
-        return ContextReadiness(
-            context_ready=False,
-            block_reason="bars_not_initialized",
-            latest_1m_bar_time=latest_1m,
-            latest_5m_bar_time=latest_5m,
-            bars_1m_available=False,
-            bars_5m_available=bool(b5),
-            vwap_available=False,
-            opening_range_available=False,
-            atr_available=False,
-        )
-
+        return "bars_not_initialized", False, bool(b5), False, False, False
     if not b5:
-        return ContextReadiness(
-            context_ready=False,
-            block_reason="insufficient_5m_bars",
-            latest_1m_bar_time=latest_1m,
-            latest_5m_bar_time=latest_5m,
-            bars_1m_available=True,
-            bars_5m_available=False,
-            vwap_available=False,
-            opening_range_available=False,
-            atr_available=False,
-        )
-
-    age_1m = (current - latest_1m).total_seconds() if latest_1m else None
-    age_5m = (current - latest_5m).total_seconds() if latest_5m else None
-    if age_1m is None or age_1m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_1M:
-        return ContextReadiness(
-            context_ready=False,
-            block_reason="stale_1m_bars",
-            latest_1m_bar_time=latest_1m,
-            latest_5m_bar_time=latest_5m,
-            bars_1m_available=True,
-            bars_5m_available=True,
-            vwap_available=False,
-            opening_range_available=False,
-            atr_available=False,
-        )
-    if age_5m is None or age_5m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_5M:
-        return ContextReadiness(
-            context_ready=False,
-            block_reason="stale_5m_bars",
-            latest_1m_bar_time=latest_1m,
-            latest_5m_bar_time=latest_5m,
-            bars_1m_available=True,
-            bars_5m_available=True,
-            vwap_available=False,
-            opening_range_available=False,
-            atr_available=False,
-        )
+        return "insufficient_5m_bars", True, False, False, False, False
 
     anchor = latest_1m or latest_5m
+    if anchor is None:
+        return "bars_not_initialized", False, False, False, False, False
+
     session_day = context_calculator.session_date_et(anchor)
     rth_1m = context_calculator.filter_rth_bars_on_session_day(b1, session_day)
     rth_5m = context_calculator.filter_rth_bars_on_session_day(b5, session_day)
 
     if not rth_1m or not rth_5m:
-        return ContextReadiness(
-            context_ready=False,
-            block_reason="insufficient_1m_bars",
-            latest_1m_bar_time=latest_1m,
-            latest_5m_bar_time=latest_5m,
-            bars_1m_available=True,
-            bars_5m_available=True,
-            vwap_available=False,
-            opening_range_available=False,
-            atr_available=False,
-        )
+        return "insufficient_1m_bars", True, True, False, False, False
 
     if len(rth_1m) < 5:
-        return ContextReadiness(
-            context_ready=False,
-            block_reason="insufficient_1m_bars",
-            latest_1m_bar_time=latest_1m,
-            latest_5m_bar_time=latest_5m,
-            bars_1m_available=True,
-            bars_5m_available=True,
-            vwap_available=False,
-            opening_range_available=False,
-            atr_available=False,
-        )
+        return "insufficient_1m_bars", True, True, False, False, False
 
     vwap_ok = context_calculator.compute_session_vwap(rth_1m) is not None
     orh, orl = context_calculator.compute_opening_range(
@@ -177,15 +102,176 @@ def evaluate_context_readiness(
     else:
         reason = "none"
 
-    ready = reason == "none"
-    return ContextReadiness(
-        context_ready=ready,
-        block_reason=reason,
-        latest_1m_bar_time=latest_1m,
-        latest_5m_bar_time=latest_5m,
-        bars_1m_available=True,
-        bars_5m_available=True,
-        vwap_available=vwap_ok,
-        opening_range_available=or_ok,
-        atr_available=atr_ok,
+    return reason, True, True, vwap_ok, or_ok, atr_ok
+
+
+def evaluate_context_readiness(
+    *,
+    bars_1m: list[IntradayBar],
+    bars_5m: list[IntradayBar],
+    settings: Settings,
+    dxlink: DxLinkHealthSnapshot,
+    now: datetime | None = None,
+) -> ContextReadiness:
+    """Separate live-trading readiness (strict + RTH) from post-close analysis readiness."""
+    current = now or datetime.now(timezone.utc)
+    rth_open = is_us_equity_rth_open(current)
+    expected_session = expected_context_session_date_et(current)
+
+    def _readiness(
+        *,
+        live: bool,
+        analysis: bool,
+        block: str,
+        block_a: str,
+        latest_1m: datetime | None,
+        latest_5m: datetime | None,
+        b1a: bool,
+        b5a: bool,
+        vwap: bool,
+        ora: bool,
+        atr: bool,
+        session_day: date | None,
+    ) -> ContextReadiness:
+        return ContextReadiness(
+            us_equity_rth_open=rth_open,
+            context_ready_for_live_trading=live,
+            context_ready_for_analysis=analysis,
+            context_ready=live,
+            block_reason=block,
+            block_reason_analysis=block_a,
+            latest_session_date_et=session_day,
+            latest_1m_bar_time=latest_1m,
+            latest_5m_bar_time=latest_5m,
+            bars_1m_available=b1a,
+            bars_5m_available=b5a,
+            vwap_available=vwap,
+            opening_range_available=ora,
+            atr_available=atr,
+        )
+
+    if not (dxlink.connected and dxlink.subscribed):
+        return _readiness(
+            live=False,
+            analysis=False,
+            block="dxlink_not_connected",
+            block_a="dxlink_not_connected",
+            latest_1m=None,
+            latest_5m=None,
+            b1a=False,
+            b5a=False,
+            vwap=False,
+            ora=False,
+            atr=False,
+            session_day=None,
+        )
+
+    b1 = _dxlink_bars_only(bars_1m)
+    b5 = _dxlink_bars_only(bars_5m)
+
+    latest_1m = _as_utc_aware(b1[-1].bar_time) if b1 else None
+    latest_5m = _as_utc_aware(b5[-1].bar_time) if b5 else None
+    latest_session = context_calculator.session_date_et(latest_1m) if latest_1m else None
+
+    age_1m = (current - latest_1m).total_seconds() if latest_1m else None
+    age_5m = (current - latest_5m).total_seconds() if latest_5m else None
+    stale_1m = age_1m is None or age_1m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_1M
+    stale_5m = age_5m is None or age_5m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_5M
+
+    if rth_open and stale_1m:
+        return _readiness(
+            live=False,
+            analysis=False,
+            block="stale_1m_bars",
+            block_a="stale_1m_bars",
+            latest_1m=latest_1m,
+            latest_5m=latest_5m,
+            b1a=bool(b1),
+            b5a=bool(b5),
+            vwap=False,
+            ora=False,
+            atr=False,
+            session_day=latest_session,
+        )
+    if rth_open and stale_5m:
+        return _readiness(
+            live=False,
+            analysis=False,
+            block="stale_5m_bars",
+            block_a="stale_5m_bars",
+            latest_1m=latest_1m,
+            latest_5m=latest_5m,
+            b1a=bool(b1),
+            b5a=bool(b5),
+            vwap=False,
+            ora=False,
+            atr=False,
+            session_day=latest_session,
+        )
+
+    ar_reason, b1a, b5a, vwap_ok, or_ok, atr_ok = _metrics_reason_and_flags(
+        b1=b1,
+        b5=b5,
+        latest_1m=latest_1m,
+        latest_5m=latest_5m,
+        settings=settings,
+        current=current,
+    )
+
+    analysis_ready = ar_reason == "none"
+    block_analysis = ar_reason
+    if analysis_ready and not rth_open and latest_session is not None and latest_session != expected_session:
+        analysis_ready = False
+        block_analysis = "prior_session_data"
+
+    if analysis_ready and not rth_open:
+        block_analysis = "latest_session_complete"
+
+    live_ready = bool(rth_open and analysis_ready and block_analysis in ("none", "latest_session_complete"))
+
+    if not analysis_ready:
+        return _readiness(
+            live=False,
+            analysis=False,
+            block=ar_reason,
+            block_a=block_analysis,
+            latest_1m=latest_1m,
+            latest_5m=latest_5m,
+            b1a=b1a,
+            b5a=b5a,
+            vwap=vwap_ok,
+            ora=or_ok,
+            atr=atr_ok,
+            session_day=latest_session,
+        )
+
+    if not rth_open:
+        return _readiness(
+            live=False,
+            analysis=True,
+            block="market_closed",
+            block_a=block_analysis,
+            latest_1m=latest_1m,
+            latest_5m=latest_5m,
+            b1a=b1a,
+            b5a=b5a,
+            vwap=vwap_ok,
+            ora=or_ok,
+            atr=atr_ok,
+            session_day=latest_session,
+        )
+
+    return _readiness(
+        live=True,
+        analysis=True,
+        block="none",
+        block_a="none",
+        latest_1m=latest_1m,
+        latest_5m=latest_5m,
+        b1a=b1a,
+        b5a=b5a,
+        vwap=vwap_ok,
+        ora=or_ok,
+        atr=atr_ok,
+        session_day=latest_session,
     )
