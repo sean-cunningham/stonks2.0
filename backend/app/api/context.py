@@ -8,7 +8,12 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.schemas.bars import BarListResponse
-from app.schemas.context import ContextRefreshResponse, ContextStatusResponse, ContextSummaryResponse
+from app.schemas.context import (
+    ContextRefreshResponse,
+    ContextStatusDebugResponse,
+    ContextStatusResponse,
+    ContextSummaryResponse,
+)
 from app.services.market.context_service import ContextService
 
 router = APIRouter(prefix="/context/spy", tags=["context"])
@@ -16,6 +21,11 @@ router = APIRouter(prefix="/context/spy", tags=["context"])
 
 def get_context_service(db: Session = Depends(get_db)) -> ContextService:
     return ContextService(db=db, settings=get_settings())
+
+
+@router.get("/status/debug", response_model=ContextStatusDebugResponse)
+def get_context_status_debug(service: ContextService = Depends(get_context_service)) -> ContextStatusDebugResponse:
+    return service.get_status_debug()
 
 
 @router.get("/status", response_model=ContextStatusResponse)

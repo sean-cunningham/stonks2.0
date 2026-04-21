@@ -207,6 +207,86 @@ class ContextSessionReadinessTests(unittest.TestCase):
         self.assertEqual(out.block_reason, "stale_5m_bars")
         self.assertEqual(out.block_reason_analysis, "stale_5m_bars")
 
+    def test_rth_latest_1m_1525_and_latest_5m_1520_not_stale(self) -> None:
+        now = datetime(2026, 4, 21, 15, 26, 0, tzinfo=timezone.utc)
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= datetime(2026, 4, 21, 15, 25, 0, tzinfo=timezone.utc)]
+        b5 = [x for x in b5 if x.bar_time <= datetime(2026, 4, 21, 15, 20, 0, tzinfo=timezone.utc)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertNotEqual(out.block_reason, "stale_5m_bars")
+
+    def test_rth_latest_1m_1529_and_latest_5m_1520_is_stale(self) -> None:
+        now = datetime(2026, 4, 21, 15, 29, 30, tzinfo=timezone.utc)
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= datetime(2026, 4, 21, 15, 29, 0, tzinfo=timezone.utc)]
+        b5 = [x for x in b5 if x.bar_time <= datetime(2026, 4, 21, 15, 20, 0, tzinfo=timezone.utc)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertEqual(out.block_reason, "stale_5m_bars")
+        self.assertEqual(out.block_reason_analysis, "stale_5m_bars")
+
+    def test_rth_latest_1m_1530_and_latest_5m_1525_not_stale(self) -> None:
+        now = datetime(2026, 4, 21, 15, 30, 30, tzinfo=timezone.utc)
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= datetime(2026, 4, 21, 15, 30, 0, tzinfo=timezone.utc)]
+        b5 = [x for x in b5 if x.bar_time <= datetime(2026, 4, 21, 15, 25, 0, tzinfo=timezone.utc)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertNotEqual(out.block_reason, "stale_5m_bars")
+
+    def test_rth_latest_1m_1538_and_latest_5m_1530_not_stale(self) -> None:
+        now = datetime(2026, 4, 21, 15, 38, 30, tzinfo=timezone.utc)
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= datetime(2026, 4, 21, 15, 38, 0, tzinfo=timezone.utc)]
+        b5 = [x for x in b5 if x.bar_time <= datetime(2026, 4, 21, 15, 30, 0, tzinfo=timezone.utc)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertFalse(out.stale_5m_boolean)
+        self.assertEqual(out.expected_latest_completed_5m_start, datetime(2026, 4, 21, 15, 30, 0, tzinfo=timezone.utc))
+        self.assertNotEqual(out.block_reason, "stale_5m_bars")
+
+    def test_rth_latest_1m_1553_and_latest_5m_1545_not_stale(self) -> None:
+        now = datetime(2026, 4, 21, 15, 53, 30, tzinfo=timezone.utc)
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= datetime(2026, 4, 21, 15, 53, 0, tzinfo=timezone.utc)]
+        b5 = [x for x in b5 if x.bar_time <= datetime(2026, 4, 21, 15, 45, 0, tzinfo=timezone.utc)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertFalse(out.stale_5m_boolean)
+        self.assertEqual(out.expected_latest_completed_5m_start, datetime(2026, 4, 21, 15, 45, 0, tzinfo=timezone.utc))
+        self.assertNotEqual(out.block_reason, "stale_5m_bars")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,12 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.repositories.bars_repository import BarsRepository
 from app.schemas.bars import BarListResponse, BarRow
-from app.schemas.context import ContextRefreshResponse, ContextStatusResponse, ContextSummaryResponse
+from app.schemas.context import (
+    ContextRefreshResponse,
+    ContextStatusDebugResponse,
+    ContextStatusResponse,
+    ContextSummaryResponse,
+)
 from app.services.broker.dxlink_spy_candle_streamer import get_spy_candle_streamer
 from app.services.market import bar_ingestion, context_calculator, context_status
 from app.services.market.bar_aggregate import DXLINK_BAR_SOURCE
@@ -71,8 +76,33 @@ class ContextService:
             vwap_available=readiness.vwap_available,
             opening_range_available=readiness.opening_range_available,
             atr_available=readiness.atr_available,
+            expected_latest_completed_5m_start=readiness.expected_latest_completed_5m_start,
+            stale_5m_reference_time=readiness.stale_5m_reference_time,
+            stale_5m_seconds=readiness.stale_5m_seconds,
+            stale_5m_boolean=readiness.stale_5m_boolean,
             source_status="ok" if analysis_ok else "degraded",
             bars_source=source,
+        )
+
+    def get_status_debug(self) -> ContextStatusDebugResponse:
+        """Same readiness evaluation as /context/spy/status; exposes 5m staleness inputs explicitly."""
+        bars_1m, bars_5m = self._load_bars()
+        readiness = context_status.evaluate_context_readiness(
+            bars_1m=bars_1m,
+            bars_5m=bars_5m,
+            settings=self._settings,
+            dxlink=self._dxlink_health(),
+        )
+        return ContextStatusDebugResponse(
+            symbol="SPY",
+            latest_1m_bar_time=readiness.latest_1m_bar_time,
+            latest_5m_bar_time=readiness.latest_5m_bar_time,
+            expected_latest_completed_5m_start=readiness.expected_latest_completed_5m_start,
+            stale_5m_reference_time=readiness.stale_5m_reference_time,
+            stale_5m_seconds=readiness.stale_5m_seconds,
+            stale_5m_boolean=readiness.stale_5m_boolean,
+            block_reason=readiness.block_reason,
+            block_reason_analysis=readiness.block_reason_analysis,
         )
 
     def get_bars_1m(self) -> BarListResponse:

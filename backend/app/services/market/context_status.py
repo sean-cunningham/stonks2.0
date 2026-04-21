@@ -29,13 +29,19 @@ def _expected_latest_completed_5m_start(latest_1m: datetime) -> datetime:
     """
     Map latest completed 1m timestamp to the expected latest *completed* 5m bucket start.
 
-    Bars are labeled by bucket-start time. If latest 1m is e.g. 14:02, the latest completed
-    5m bucket is 13:55 (the 14:00..14:04 bucket is still in progress).
+    Bars are labeled by bucket-start time. A 5m bucket [S..S+4] is complete only when the
+    latest completed 1m is >= S+4.
+
+    Examples:
+    - latest_1m=15:25 => expected latest completed 5m start is 15:20
+    - latest_1m=15:29 => expected latest completed 5m start is 15:25
+    - latest_1m=15:30 => expected latest completed 5m start is 15:25
     """
     if latest_1m.tzinfo is None:
         latest_1m = latest_1m.replace(tzinfo=timezone.utc)
-    floored = latest_1m.replace(minute=(latest_1m.minute // 5) * 5, second=0, microsecond=0)
-    return floored - timedelta(minutes=5)
+    # Shift back 4 minutes so floor-to-5 yields the latest completed bucket start.
+    completed_anchor = latest_1m - timedelta(minutes=4)
+    return completed_anchor.replace(minute=(completed_anchor.minute // 5) * 5, second=0, microsecond=0)
 
 
 @dataclass
@@ -56,6 +62,10 @@ class ContextReadiness:
     vwap_available: bool
     opening_range_available: bool
     atr_available: bool
+    expected_latest_completed_5m_start: datetime | None = None
+    stale_5m_reference_time: datetime | None = None
+    stale_5m_seconds: float | None = None
+    stale_5m_boolean: bool = False
 
 
 def _metrics_reason_and_flags(
@@ -145,6 +155,10 @@ def evaluate_context_readiness(
         ora: bool,
         atr: bool,
         session_day: date | None,
+        expected_5m: datetime | None = None,
+        stale_ref: datetime | None = None,
+        stale_seconds: float | None = None,
+        stale_flag: bool = False,
     ) -> ContextReadiness:
         return ContextReadiness(
             us_equity_rth_open=rth_open,
@@ -161,6 +175,10 @@ def evaluate_context_readiness(
             vwap_available=vwap,
             opening_range_available=ora,
             atr_available=atr,
+            expected_latest_completed_5m_start=expected_5m,
+            stale_5m_reference_time=stale_ref,
+            stale_5m_seconds=stale_seconds,
+            stale_5m_boolean=stale_flag,
         )
 
     b1 = _dxlink_bars_only(bars_1m)
@@ -191,10 +209,15 @@ def evaluate_context_readiness(
     age_5m = (current - latest_5m).total_seconds() if latest_5m else None
     stale_1m = age_1m is None or age_1m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_1M
     stale_5m = age_5m is None or age_5m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_5M
+    expected_5m_start: datetime | None = None
+    stale_5m_ref: datetime | None = current
+    stale_5m_seconds: float | None = age_5m
     if rth_open and latest_1m is not None and latest_5m is not None:
         expected_5m_start = _expected_latest_completed_5m_start(latest_1m)
         # Freshness for 5m in RTH should follow completed-bucket semantics rather than wall-clock age.
         stale_5m = latest_5m < expected_5m_start
+        stale_5m_ref = expected_5m_start
+        stale_5m_seconds = max((expected_5m_start - latest_5m).total_seconds(), 0.0)
 
     if rth_open and stale_1m:
         return _readiness(
@@ -210,6 +233,10 @@ def evaluate_context_readiness(
             ora=False,
             atr=False,
             session_day=latest_session,
+            expected_5m=expected_5m_start,
+            stale_ref=stale_5m_ref,
+            stale_seconds=stale_5m_seconds,
+            stale_flag=stale_5m,
         )
     if rth_open and stale_5m:
         return _readiness(
@@ -225,6 +252,10 @@ def evaluate_context_readiness(
             ora=False,
             atr=False,
             session_day=latest_session,
+            expected_5m=expected_5m_start,
+            stale_ref=stale_5m_ref,
+            stale_seconds=stale_5m_seconds,
+            stale_flag=stale_5m,
         )
 
     ar_reason, b1a, b5a, vwap_ok, or_ok, atr_ok = _metrics_reason_and_flags(
@@ -267,6 +298,10 @@ def evaluate_context_readiness(
             ora=or_ok,
             atr=atr_ok,
             session_day=latest_session,
+            expected_5m=expected_5m_start,
+            stale_ref=stale_5m_ref,
+            stale_seconds=stale_5m_seconds,
+            stale_flag=stale_5m,
         )
 
     if not rth_open:
@@ -283,6 +318,10 @@ def evaluate_context_readiness(
             ora=or_ok,
             atr=atr_ok,
             session_day=latest_session,
+            expected_5m=expected_5m_start,
+            stale_ref=stale_5m_ref,
+            stale_seconds=stale_5m_seconds,
+            stale_flag=stale_5m,
         )
 
     return _readiness(
@@ -298,4 +337,8 @@ def evaluate_context_readiness(
         ora=or_ok,
         atr=atr_ok,
         session_day=latest_session,
+        expected_5m=expected_5m_start,
+        stale_ref=stale_5m_ref,
+        stale_seconds=stale_5m_seconds,
+        stale_flag=stale_5m,
     )
