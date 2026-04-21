@@ -74,3 +74,27 @@ def ensure_market_snapshot_schema() -> None:
         for column, ddl_type in expected_columns.items():
             if column not in existing:
                 connection.execute(text(f"ALTER TABLE market_snapshots ADD COLUMN {column} {ddl_type}"))
+
+
+def ensure_paper_trade_schema() -> None:
+    """Additive SQLite columns for paper_trades (existing local DBs)."""
+    if not settings.DATABASE_URL.startswith("sqlite"):
+        return
+    with engine.begin() as connection:
+        table = connection.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'")
+        ).fetchone()
+        if not table:
+            return
+        rows = connection.execute(text("PRAGMA table_info(paper_trades)")).fetchall()
+        existing = {row[1] for row in rows}
+        expected_columns: dict[str, str] = {
+            "entry_decision": "VARCHAR(16) DEFAULT ''",
+            "evaluation_snapshot_json": "JSON",
+            "entry_reference_basis": "VARCHAR(32) DEFAULT 'option_ask'",
+            "exit_reference_basis": "VARCHAR(32)",
+            "exit_reason": "TEXT",
+        }
+        for column, ddl_type in expected_columns.items():
+            if column not in existing:
+                connection.execute(text(f"ALTER TABLE paper_trades ADD COLUMN {column} {ddl_type}"))
