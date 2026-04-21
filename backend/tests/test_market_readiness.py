@@ -149,3 +149,31 @@ class EvaluationMarketStatusRefreshTests(unittest.TestCase):
                 out = MarketStoreService.get_spy_status_for_evaluation(svc)
         self.assertTrue(out.market_ready)
         mock_refresh.assert_not_called()
+
+    def test_resolve_skips_refresh_when_not_stale_cache_blocker(self) -> None:
+        """Credentials / broker blockers must not trigger a blind refresh."""
+        blocked = MarketStatusResponse(
+            symbol="SPY",
+            market_ready=False,
+            block_reason="missing_credentials",
+            quote_available=False,
+            chain_available=False,
+            quote_age_seconds=None,
+            chain_age_seconds=None,
+            quote_is_fresh=False,
+            chain_is_fresh=False,
+            latest_quote_time=None,
+            latest_chain_time=None,
+            source_status="not_ready",
+        )
+        with patch.object(MarketStoreService, "get_spy_status", return_value=blocked):
+            with patch.object(MarketStoreService, "refresh_spy") as mock_refresh:
+                svc = MarketStoreService.__new__(MarketStoreService)  # type: ignore[misc]
+                svc._db = MagicMock()
+                res = MarketStoreService.resolve_spy_market_for_evaluation(svc)
+        mock_refresh.assert_not_called()
+        self.assertEqual(res.market_status_source, "cached")
+        self.assertFalse(res.auto_refresh_attempted)
+        self.assertIsNone(res.auto_refresh_trigger_reason)
+        self.assertFalse(res.post_refresh_market_ready)
+        self.assertEqual(res.post_refresh_block_reason, "missing_credentials")

@@ -120,6 +120,54 @@ def _fake_refresh_spy(self: MarketStoreService) -> None:
     )
 
 
+def _fake_refresh_still_broken(self: MarketStoreService) -> None:
+    """Simulate refresh that persists a still-not-ready snapshot (honest downstream blocker)."""
+    now = datetime.now(timezone.utc)
+    MarketRepository(self._db).upsert_latest_snapshot(
+        symbol="SPY",
+        snapshot_time=now,
+        chain_snapshot_time=now,
+        underlying_bid=None,
+        underlying_ask=None,
+        underlying_mid=None,
+        underlying_last=None,
+        quote_age_seconds=None,
+        chain_age_seconds=None,
+        chain_contract_count=None,
+        expiration_dates_json=None,
+        nearest_expiration=None,
+        atm_reference_price=None,
+        near_atm_contracts_json=None,
+        is_data_fresh=False,
+        data_source_status="broker_error",
+        raw_quote_available=False,
+        raw_chain_available=False,
+    )
+
+
+def _test_settings() -> Settings:
+    return Settings(
+        MARKET_QUOTE_MAX_AGE_SECONDS=15,
+        MARKET_CHAIN_MAX_AGE_SECONDS=60,
+    )
+
+
+def _make_app(SessionLocal: sessionmaker, test_settings: Settings) -> FastAPI:
+    def override_market() -> Generator:
+        db = SessionLocal()
+        try:
+            yield MarketStoreService(db=db, settings=test_settings)
+        finally:
+            db.close()
+
+    app = FastAPI()
+    app.include_router(strategy_router)
+    app.dependency_overrides[get_settings] = lambda: test_settings
+    app.dependency_overrides[get_context_service] = lambda: StubContextService()
+    app.dependency_overrides[get_market_service] = override_market
+    return app
+
+
 class StrategyEvaluationMarketRefreshIntegrationTests(unittest.TestCase):
     def test_evaluation_triggers_refresh_and_drops_stale_quote_blocker(self) -> None:
         engine = create_engine(
@@ -159,23 +207,8 @@ class StrategyEvaluationMarketRefreshIntegrationTests(unittest.TestCase):
         finally:
             db_seed.close()
 
-        test_settings = Settings(
-            MARKET_QUOTE_MAX_AGE_SECONDS=15,
-            MARKET_CHAIN_MAX_AGE_SECONDS=60,
-        )
-
-        def override_market() -> Generator:
-            db = SessionLocal()
-            try:
-                yield MarketStoreService(db=db, settings=test_settings)
-            finally:
-                db.close()
-
-        app = FastAPI()
-        app.include_router(strategy_router)
-        app.dependency_overrides[get_settings] = lambda: test_settings
-        app.dependency_overrides[get_context_service] = lambda: StubContextService()
-        app.dependency_overrides[get_market_service] = override_market
+        settings = _test_settings()
+        app = _make_app(SessionLocal, settings)
 
         with patch.object(MarketStoreService, "refresh_spy", _fake_refresh_spy):
             with TestClient(app) as client:
@@ -191,6 +224,187 @@ class StrategyEvaluationMarketRefreshIntegrationTests(unittest.TestCase):
         self.assertEqual(trace["post_refresh_block_reason"], "none")
         blockers = data["blockers"]
         self.assertFalse(any("stale_quote" in b for b in blockers))
+
+    def test_evaluation_stale_chain_triggers_one_refresh(self) -> None:
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=engine)
+        SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+        now = datetime.now(timezone.utc)
+        db_seed = SessionLocal()
+        try:
+            db_seed.add(
+                MarketSnapshot(
+                    symbol="SPY",
+                    snapshot_time=now - timedelta(seconds=5),
+                    chain_snapshot_time=now - timedelta(seconds=120),
+                    underlying_bid=500.0,
+                    underlying_ask=500.1,
+                    underlying_mid=500.05,
+                    underlying_last=500.05,
+                    quote_age_seconds=10.0,
+                    chain_age_seconds=120.0,
+                    chain_contract_count=1,
+                    expiration_dates_json=["2026-04-22"],
+                    nearest_expiration="2026-04-22",
+                    atm_reference_price=500.05,
+                    near_atm_contracts_json=[_NEAR_ATM_ROW],
+                    is_data_fresh=False,
+                    data_source_status="ok",
+                    raw_quote_available=True,
+                    raw_chain_available=True,
+                )
+            )
+            db_seed.commit()
+        finally:
+            db_seed.close()
+
+        settings = _test_settings()
+        app = _make_app(SessionLocal, settings)
+
+        refresh_calls: list[int] = []
+
+        def _track_and_refresh(self: MarketStoreService) -> None:
+            refresh_calls.append(1)
+            _fake_refresh_spy(self)
+
+        with patch.object(MarketStoreService, "refresh_spy", new=_track_and_refresh):
+            with TestClient(app) as client:
+                response = client.get("/strategy/spy/strategy-1/evaluation")
+
+        self.assertEqual(len(refresh_calls), 1)
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        trace = data["market_evaluation_trace"]
+        self.assertTrue(trace["auto_refresh_attempted"])
+        self.assertEqual(trace["market_status_source"], "refreshed_for_evaluation")
+        self.assertEqual(trace["auto_refresh_trigger_reason"], "stale_chain")
+        self.assertTrue(trace["post_refresh_market_ready"])
+        self.assertEqual(trace["post_refresh_block_reason"], "none")
+        self.assertFalse(any("stale_chain" in b for b in data["blockers"]))
+
+    def test_evaluation_healthy_market_no_refresh_attempted(self) -> None:
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=engine)
+        SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+        now = datetime.now(timezone.utc)
+        db_seed = SessionLocal()
+        try:
+            db_seed.add(
+                MarketSnapshot(
+                    symbol="SPY",
+                    snapshot_time=now - timedelta(seconds=5),
+                    chain_snapshot_time=now - timedelta(seconds=10),
+                    underlying_bid=500.0,
+                    underlying_ask=500.1,
+                    underlying_mid=500.05,
+                    underlying_last=500.05,
+                    quote_age_seconds=5.0,
+                    chain_age_seconds=10.0,
+                    chain_contract_count=1,
+                    expiration_dates_json=["2026-04-22"],
+                    nearest_expiration="2026-04-22",
+                    atm_reference_price=500.05,
+                    near_atm_contracts_json=[_NEAR_ATM_ROW],
+                    is_data_fresh=True,
+                    data_source_status="ok",
+                    raw_quote_available=True,
+                    raw_chain_available=True,
+                )
+            )
+            db_seed.commit()
+        finally:
+            db_seed.close()
+
+        settings = _test_settings()
+        app = _make_app(SessionLocal, settings)
+
+        with patch.object(MarketStoreService, "refresh_spy") as mock_refresh:
+            with TestClient(app) as client:
+                response = client.get("/strategy/spy/strategy-1/evaluation")
+
+        mock_refresh.assert_not_called()
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        trace = data["market_evaluation_trace"]
+        self.assertFalse(trace["auto_refresh_attempted"])
+        self.assertEqual(trace["market_status_source"], "cached")
+        self.assertIsNone(trace["auto_refresh_trigger_reason"])
+        self.assertTrue(trace["post_refresh_market_ready"])
+        self.assertEqual(trace["post_refresh_block_reason"], "none")
+
+    def test_evaluation_refresh_failure_fail_closed(self) -> None:
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=engine)
+        SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
+
+        old = datetime(2026, 4, 21, 14, 0, 0, tzinfo=timezone.utc)
+        db_seed = SessionLocal()
+        try:
+            db_seed.add(
+                MarketSnapshot(
+                    symbol="SPY",
+                    snapshot_time=old,
+                    chain_snapshot_time=old,
+                    underlying_bid=499.0,
+                    underlying_ask=499.1,
+                    underlying_mid=499.05,
+                    underlying_last=499.05,
+                    quote_age_seconds=999.0,
+                    chain_age_seconds=999.0,
+                    chain_contract_count=1,
+                    expiration_dates_json=["2026-04-22"],
+                    nearest_expiration="2026-04-22",
+                    atm_reference_price=499.05,
+                    near_atm_contracts_json=[_NEAR_ATM_ROW],
+                    is_data_fresh=False,
+                    data_source_status="ok",
+                    raw_quote_available=True,
+                    raw_chain_available=True,
+                )
+            )
+            db_seed.commit()
+        finally:
+            db_seed.close()
+
+        settings = _test_settings()
+        app = _make_app(SessionLocal, settings)
+
+        refresh_calls: list[int] = []
+
+        def _track_and_fail(self: MarketStoreService) -> None:
+            refresh_calls.append(1)
+            _fake_refresh_still_broken(self)
+
+        with patch.object(MarketStoreService, "refresh_spy", new=_track_and_fail):
+            with TestClient(app) as client:
+                response = client.get("/strategy/spy/strategy-1/evaluation")
+
+        self.assertEqual(len(refresh_calls), 1)
+        self.assertEqual(response.status_code, 200, response.text)
+        data = response.json()
+        self.assertEqual(data["decision"], "no_trade")
+        trace = data["market_evaluation_trace"]
+        self.assertTrue(trace["auto_refresh_attempted"])
+        self.assertEqual(trace["market_status_source"], "refreshed_for_evaluation")
+        self.assertEqual(trace["auto_refresh_trigger_reason"], "stale_quote")
+        self.assertFalse(trace["post_refresh_market_ready"])
+        self.assertEqual(trace["post_refresh_block_reason"], "broker_error")
+        blockers = data["blockers"]
+        self.assertTrue(any(b == "market_not_ready:broker_error" for b in blockers))
 
 
 if __name__ == "__main__":
