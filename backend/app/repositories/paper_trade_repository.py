@@ -29,6 +29,28 @@ class PaperTradeRepository:
     def get_trade(self, trade_id: int) -> PaperTrade | None:
         return self._db.get(PaperTrade, trade_id)
 
+    def has_open_duplicate_fingerprint(
+        self,
+        *,
+        strategy_id: str,
+        option_symbol: str,
+        side: str,
+        entry_evaluation_fingerprint: str,
+    ) -> bool:
+        """True if an open paper trade already exists for this dedupe identity."""
+        stmt = (
+            select(PaperTrade.id)
+            .where(
+                PaperTrade.strategy_id == strategy_id,
+                PaperTrade.option_symbol == option_symbol,
+                PaperTrade.side == side,
+                PaperTrade.status == "open",
+                PaperTrade.entry_evaluation_fingerprint == entry_evaluation_fingerprint,
+            )
+            .limit(1)
+        )
+        return self._db.scalar(stmt) is not None
+
     def list_open(self, *, strategy_id: str) -> list[PaperTrade]:
         stmt = (
             select(PaperTrade)

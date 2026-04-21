@@ -47,6 +47,39 @@ def _find_contract(chain: ChainLatestResponse, option_symbol: str) -> NearAtmCon
     raise PaperTradeError("option_contract_not_in_chain_snapshot")
 
 
+def _utc_iso_floor_second(dt: datetime) -> str:
+    """UTC ISO-8601 with microsecond stripped (deterministic dedupe bucket)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.replace(microsecond=0).isoformat()
+
+
+def build_entry_evaluation_fingerprint(
+    *,
+    strategy_id: str,
+    symbol: str,
+    option_symbol: str,
+    side: str,
+    decision: str,
+    evaluation_timestamp: datetime,
+    chain_snapshot_timestamp: datetime,
+) -> str:
+    """Stable identity for idempotent open: strategy + contract + side + decision + second buckets."""
+    return "|".join(
+        [
+            strategy_id,
+            symbol,
+            option_symbol,
+            side,
+            decision,
+            _utc_iso_floor_second(evaluation_timestamp),
+            _utc_iso_floor_second(chain_snapshot_timestamp),
+        ]
+    )
+
+
 class PaperTradeService:
     """Single-contract SPY paper positions for Strategy 1."""
 
@@ -76,7 +109,28 @@ class PaperTradeService:
         if quote.bid is None or float(quote.bid) <= 0:
             raise PaperTradeError("option_bid_missing_for_two_sided_quote")
 
+        chain_ts = chain.snapshot_timestamp
+        if chain_ts is None:
+            raise PaperTradeError("option_chain_timestamp_missing")
+        fingerprint = build_entry_evaluation_fingerprint(
+            strategy_id=self.STRATEGY_ID,
+            symbol=evaluation.symbol,
+            option_symbol=cand.option_symbol,
+            side="long",
+            decision=evaluation.decision,
+            evaluation_timestamp=evaluation.evaluation_timestamp,
+            chain_snapshot_timestamp=chain_ts,
+        )
+
         repo = PaperTradeRepository(db)
+        if repo.has_open_duplicate_fingerprint(
+            strategy_id=self.STRATEGY_ID,
+            option_symbol=cand.option_symbol,
+            side="long",
+            entry_evaluation_fingerprint=fingerprint,
+        ):
+            raise PaperTradeError("duplicate_open_position")
+
         now = repo.utc_now()
         snap = evaluation.model_dump(mode="json")
         row = PaperTrade(
@@ -96,6 +150,7 @@ class PaperTradeService:
             entry_reference_basis="option_ask",
             exit_reference_basis=None,
             exit_reason=None,
+            entry_evaluation_fingerprint=fingerprint,
         )
         row = repo.create_trade(row)
         repo.append_event(
@@ -106,6 +161,7 @@ class PaperTradeService:
                 details_json={
                     "entry_reference_basis": "option_ask",
                     "entry_price_per_share": row.entry_price,
+                    "entry_evaluation_fingerprint": fingerprint,
                     "chain_snapshot_time": chain.snapshot_timestamp.isoformat()
                     if chain.snapshot_timestamp
                     else None,

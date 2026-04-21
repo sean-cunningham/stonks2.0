@@ -23,8 +23,14 @@ from app.services.paper.paper_trade_service import (
 import app.models.trade  # noqa: F401
 
 
-def _fresh_chain(*, bid: float = 2.0, ask: float = 2.2, sym: str = "SPY  260422C00500000") -> ChainLatestResponse:
-    ts = datetime.now(timezone.utc)
+def _fresh_chain(
+    *,
+    bid: float = 2.0,
+    ask: float = 2.2,
+    sym: str = "SPY  260422C00500000",
+    snapshot_timestamp: datetime | None = None,
+) -> ChainLatestResponse:
+    ts = snapshot_timestamp or datetime.now(timezone.utc)
     c = NearAtmContract(
         option_symbol=sym,
         strike=500.0,
@@ -120,7 +126,7 @@ def _ctx_snap() -> StrategyOneContextSnapshot:
     )
 
 
-def _candidate_call_eval() -> StrategyOneEvaluationResponse:
+def _candidate_call_eval(evaluation_timestamp: datetime | None = None) -> StrategyOneEvaluationResponse:
     c = NearAtmContract(
         option_symbol="SPY  260422C00500000",
         strike=500.0,
@@ -140,11 +146,11 @@ def _candidate_call_eval() -> StrategyOneEvaluationResponse:
         reasons=["ok"],
         context_snapshot_used=_ctx_snap(),
         contract_candidate=c,
-        evaluation_timestamp=datetime.now(timezone.utc),
+        evaluation_timestamp=evaluation_timestamp or datetime.now(timezone.utc),
     )
 
 
-def _candidate_put_eval() -> StrategyOneEvaluationResponse:
+def _candidate_put_eval(evaluation_timestamp: datetime | None = None) -> StrategyOneEvaluationResponse:
     c = NearAtmContract(
         option_symbol="SPY  260422P00500000",
         strike=500.0,
@@ -164,7 +170,7 @@ def _candidate_put_eval() -> StrategyOneEvaluationResponse:
         reasons=["ok"],
         context_snapshot_used=_ctx_snap(),
         contract_candidate=c,
-        evaluation_timestamp=datetime.now(timezone.utc),
+        evaluation_timestamp=evaluation_timestamp or datetime.now(timezone.utc),
     )
 
 
@@ -224,6 +230,7 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
             self.assertAlmostEqual(row.entry_price, 2.2, places=4)
             self.assertEqual(row.entry_reference_basis, "option_ask")
             self.assertEqual(row.option_symbol, "SPY  260422C00500000")
+            self.assertTrue(row.entry_evaluation_fingerprint)
             repo = PaperTradeRepository(db)
             events = repo.list_events_for_trade(row.id)
             self.assertEqual(len(events), 1)
@@ -366,6 +373,125 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
                     exit_reason="second",
                     settings=self.settings,
                 )
+        finally:
+            db.close()
+
+    def test_immediate_repeat_open_same_fingerprint_rejected(self) -> None:
+        db = self.Session()
+        try:
+            now = datetime.now(timezone.utc)
+            ev_ts = now.replace(microsecond=111000)
+            ch_ts = now.replace(microsecond=222000)
+            ev = _candidate_call_eval(evaluation_timestamp=ev_ts)
+            sym = ev.contract_candidate.option_symbol
+            ch = _fresh_chain(bid=2.0, ask=2.2, sym=sym, snapshot_timestamp=ch_ts)
+            self.svc.open_position(
+                db,
+                evaluation=ev,
+                chain=ch,
+                market_status=_market_ready(),
+                settings=self.settings,
+            )
+            with self.assertRaises(PaperTradeError) as ctx:
+                self.svc.open_position(
+                    db,
+                    evaluation=ev,
+                    chain=ch,
+                    market_status=_market_ready(),
+                    settings=self.settings,
+                )
+            self.assertEqual(str(ctx.exception), "duplicate_open_position")
+            repo = PaperTradeRepository(db)
+            open_rows = repo.list_open(strategy_id=PaperTradeService.STRATEGY_ID)
+            self.assertEqual(len([r for r in open_rows if r.option_symbol == sym]), 1)
+        finally:
+            db.close()
+
+    def test_different_option_contract_opens_with_same_timestamps(self) -> None:
+        db = self.Session()
+        try:
+            now = datetime.now(timezone.utc)
+            ev_ts = now.replace(microsecond=333000)
+            ch_ts = now.replace(microsecond=444000)
+            ev_call = _candidate_call_eval(evaluation_timestamp=ev_ts)
+            ch_call = _fresh_chain(
+                bid=2.0,
+                ask=2.2,
+                sym=ev_call.contract_candidate.option_symbol,
+                snapshot_timestamp=ch_ts,
+            )
+            self.svc.open_position(
+                db,
+                evaluation=ev_call,
+                chain=ch_call,
+                market_status=_market_ready(),
+                settings=self.settings,
+            )
+            ev_put = _candidate_put_eval(evaluation_timestamp=ev_ts)
+            ch_put = _fresh_chain(
+                bid=3.0,
+                ask=3.2,
+                sym=ev_put.contract_candidate.option_symbol,
+                snapshot_timestamp=ch_ts,
+            )
+            row2 = self.svc.open_position(
+                db,
+                evaluation=ev_put,
+                chain=ch_put,
+                market_status=_market_ready(),
+                settings=self.settings,
+            )
+            self.assertEqual(row2.option_symbol, "SPY  260422P00500000")
+            self.assertEqual(row2.status, "open")
+        finally:
+            db.close()
+
+    def test_same_contract_opens_again_after_close(self) -> None:
+        db = self.Session()
+        try:
+            t0 = datetime.now(timezone.utc)
+            ev1 = _candidate_call_eval(evaluation_timestamp=t0.replace(microsecond=100000))
+            ch1 = _fresh_chain(
+                sym=ev1.contract_candidate.option_symbol,
+                snapshot_timestamp=t0.replace(microsecond=200000),
+            )
+            row = self.svc.open_position(
+                db,
+                evaluation=ev1,
+                chain=ch1,
+                market_status=_market_ready(),
+                settings=self.settings,
+            )
+            ch_close = _fresh_chain(
+                bid=2.1,
+                ask=2.3,
+                sym=ev1.contract_candidate.option_symbol,
+            )
+            self.svc.close_position(
+                db,
+                paper_trade_id=row.id,
+                chain=ch_close,
+                market_status=_market_ready(),
+                exit_reason="test_flat",
+                settings=self.settings,
+            )
+            t1 = t0 + timedelta(seconds=5)
+            ev2 = _candidate_call_eval(evaluation_timestamp=t1.replace(microsecond=300000))
+            ch2 = _fresh_chain(
+                bid=2.0,
+                ask=2.2,
+                sym=ev2.contract_candidate.option_symbol,
+                snapshot_timestamp=t1.replace(microsecond=400000),
+            )
+            row2 = self.svc.open_position(
+                db,
+                evaluation=ev2,
+                chain=ch2,
+                market_status=_market_ready(),
+                settings=self.settings,
+            )
+            self.assertEqual(row2.status, "open")
+            self.assertNotEqual(row2.id, row.id)
         finally:
             db.close()
 

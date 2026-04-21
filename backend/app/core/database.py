@@ -94,6 +94,7 @@ def ensure_paper_trade_schema() -> None:
             "entry_reference_basis": "VARCHAR(32) DEFAULT 'option_ask'",
             "exit_reference_basis": "VARCHAR(32)",
             "exit_reason": "TEXT",
+            "entry_evaluation_fingerprint": "VARCHAR(256) DEFAULT ''",
         }
         for column, ddl_type in expected_columns.items():
             if column not in existing:

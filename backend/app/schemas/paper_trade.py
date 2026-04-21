@@ -26,6 +26,7 @@ class PaperTradeResponse(BaseModel):
     entry_price: float
     entry_decision: str
     entry_reference_basis: str
+    entry_evaluation_fingerprint: str = ""
     exit_time: datetime | None = None
     exit_price: float | None = None
     exit_reference_basis: str | None = None
@@ -43,10 +44,3 @@ class PaperTradeEventResponse(BaseModel):
     details_json: dict[str, Any] | None = None
 
 
-class PaperOpenResponse(BaseModel):
-    """Result of attempting to open a paper position from the current evaluation."""
-
-    evaluation: dict[str, Any]
-    position: PaperTradeResponse | None = None
-    opened: bool
-    error: str | None = None

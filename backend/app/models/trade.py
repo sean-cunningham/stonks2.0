@@ -29,6 +29,7 @@ class PaperTrade(Base):
     entry_reference_basis: Mapped[str] = mapped_column(String(32), default="option_ask")
     exit_reference_basis: Mapped[str | None] = mapped_column(String(32), nullable=True)
     exit_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entry_evaluation_fingerprint: Mapped[str] = mapped_column(String(256), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
