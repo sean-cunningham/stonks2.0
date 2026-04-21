@@ -27,6 +27,10 @@ class ContextStatusResponse(BaseModel):
     vwap_available: bool
     opening_range_available: bool
     atr_available: bool
+    expected_latest_completed_1m_start: datetime | None = None
+    stale_1m_reference_time: datetime | None = None
+    stale_1m_seconds: float | None = None
+    stale_1m_boolean: bool = False
     expected_latest_completed_5m_start: datetime | None = None
     stale_5m_reference_time: datetime | None = None
     stale_5m_seconds: float | None = None
@@ -44,6 +48,10 @@ class ContextStatusDebugResponse(BaseModel):
     symbol: str = "SPY"
     latest_1m_bar_time: datetime | None = None
     latest_5m_bar_time: datetime | None = None
+    expected_latest_completed_1m_start: datetime | None = None
+    stale_1m_reference_time: datetime | None = None
+    stale_1m_seconds: float | None = None
+    stale_1m_boolean: bool = False
     expected_latest_completed_5m_start: datetime | None = None
     stale_5m_reference_time: datetime | None = None
     stale_5m_seconds: float | None = None

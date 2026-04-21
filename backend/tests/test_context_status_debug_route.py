@@ -44,6 +44,10 @@ class ContextStatusDebugRouteTests(unittest.TestCase):
             "symbol",
             "latest_1m_bar_time",
             "latest_5m_bar_time",
+            "expected_latest_completed_1m_start",
+            "stale_1m_reference_time",
+            "stale_1m_seconds",
+            "stale_1m_boolean",
             "expected_latest_completed_5m_start",
             "stale_5m_reference_time",
             "stale_5m_seconds",
@@ -60,6 +64,7 @@ class ContextStatusDebugRouteTests(unittest.TestCase):
         self.assertIsInstance(data["block_reason"], str)
         self.assertIsInstance(data["block_reason_analysis"], str)
         self.assertIsInstance(data["stale_5m_boolean"], bool)
+        self.assertIsInstance(data["stale_1m_boolean"], bool)
 
 
 if __name__ == "__main__":

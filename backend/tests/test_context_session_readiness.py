@@ -287,6 +287,42 @@ class ContextSessionReadinessTests(unittest.TestCase):
         self.assertEqual(out.expected_latest_completed_5m_start, datetime(2026, 4, 21, 15, 45, 0, tzinfo=timezone.utc))
         self.assertNotEqual(out.block_reason, "stale_5m_bars")
 
+    def test_rth_latest_persisted_1m_is_current_when_wall_age_exceeds_small_threshold(self) -> None:
+        """
+        During RTH, latest completed 1m is bar_time = T for minute [T, T+1m).
+        Wall-clock age (now - T) can exceed a tight 1m threshold near end of the next minute
+        without the stream being behind; freshness must use completed-minute semantics.
+        """
+        strict = Settings(CONTEXT_BAR_MAX_STALENESS_SECONDS_1M=60)
+        now = datetime(2026, 4, 21, 18, 0, 30, tzinfo=timezone.utc)  # 14:00:30 ET, RTH
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= datetime(2026, 4, 21, 17, 59, 0, tzinfo=timezone.utc)]
+        # expected completed 1m open at 18:00:30 is 17:59:00; wall age from latest is 90s > 60
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=strict,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertEqual(out.expected_latest_completed_1m_start, datetime(2026, 4, 21, 17, 59, 0, tzinfo=timezone.utc))
+        self.assertFalse(out.stale_1m_boolean)
+        self.assertNotEqual(out.block_reason, "stale_1m_bars")
+
+    def test_rth_latest_1m_lagging_expected_completed_minute_is_stale(self) -> None:
+        now = datetime(2026, 4, 21, 18, 0, 30, tzinfo=timezone.utc)
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= datetime(2026, 4, 21, 17, 57, 0, tzinfo=timezone.utc)]
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertTrue(out.stale_1m_boolean)
+        self.assertEqual(out.block_reason, "stale_1m_bars")
+
 
 if __name__ == "__main__":
     unittest.main()

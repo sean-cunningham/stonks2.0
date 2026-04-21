@@ -25,6 +25,20 @@ def _dxlink_bars_only(bars: list[IntradayBar]) -> list[IntradayBar]:
     return [b for b in bars if (b.source_status or "").startswith(DXLINK_BAR_SOURCE)]
 
 
+def _expected_latest_completed_1m_start(now_utc: datetime) -> datetime:
+    """
+    Latest *completed* 1m bar open time (bar_time) implied by wall clock.
+
+    Bars use the candle open / period start as bar_time. The bar for [T, T+1m) completes
+    at T+1m, so at `now` the latest completed bar_time is floor(now to minute) minus 1 minute.
+    """
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    now_utc = now_utc.astimezone(timezone.utc)
+    minute_floor = now_utc.replace(second=0, microsecond=0)
+    return minute_floor - timedelta(minutes=1)
+
+
 def _expected_latest_completed_5m_start(latest_1m: datetime) -> datetime:
     """
     Map latest completed 1m timestamp to the expected latest *completed* 5m bucket start.
@@ -62,6 +76,10 @@ class ContextReadiness:
     vwap_available: bool
     opening_range_available: bool
     atr_available: bool
+    expected_latest_completed_1m_start: datetime | None = None
+    stale_1m_reference_time: datetime | None = None
+    stale_1m_seconds: float | None = None
+    stale_1m_boolean: bool = False
     expected_latest_completed_5m_start: datetime | None = None
     stale_5m_reference_time: datetime | None = None
     stale_5m_seconds: float | None = None
@@ -155,6 +173,10 @@ def evaluate_context_readiness(
         ora: bool,
         atr: bool,
         session_day: date | None,
+        expected_1m: datetime | None = None,
+        stale_1m_ref: datetime | None = None,
+        stale_1m_secs: float | None = None,
+        stale_1m_flag: bool = False,
         expected_5m: datetime | None = None,
         stale_ref: datetime | None = None,
         stale_seconds: float | None = None,
@@ -175,6 +197,10 @@ def evaluate_context_readiness(
             vwap_available=vwap,
             opening_range_available=ora,
             atr_available=atr,
+            expected_latest_completed_1m_start=expected_1m,
+            stale_1m_reference_time=stale_1m_ref,
+            stale_1m_seconds=stale_1m_secs,
+            stale_1m_boolean=stale_1m_flag,
             expected_latest_completed_5m_start=expected_5m,
             stale_5m_reference_time=stale_ref,
             stale_5m_seconds=stale_seconds,
@@ -203,15 +229,29 @@ def evaluate_context_readiness(
             ora=False,
             atr=False,
             session_day=None,
+            expected_1m=None,
+            stale_1m_ref=None,
+            stale_1m_secs=None,
+            stale_1m_flag=False,
         )
 
     age_1m = (current - latest_1m).total_seconds() if latest_1m else None
     age_5m = (current - latest_5m).total_seconds() if latest_5m else None
     stale_1m = age_1m is None or age_1m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_1M
     stale_5m = age_5m is None or age_5m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_5M
+    expected_1m_start: datetime | None = None
+    stale_1m_ref: datetime | None = current
+    stale_1m_seconds: float | None = age_1m
     expected_5m_start: datetime | None = None
     stale_5m_ref: datetime | None = current
     stale_5m_seconds: float | None = age_5m
+    if rth_open and latest_1m is not None:
+        expected_1m_start = _expected_latest_completed_1m_start(current)
+        # RTH: 1m bars are labeled by period start; natural lag vs wall clock reaches ~120s at end
+        # of the in-progress minute. Compare latest persisted open time to the expected completed bar.
+        stale_1m = latest_1m < expected_1m_start
+        stale_1m_ref = expected_1m_start
+        stale_1m_seconds = max((expected_1m_start - latest_1m).total_seconds(), 0.0)
     if rth_open and latest_1m is not None and latest_5m is not None:
         expected_5m_start = _expected_latest_completed_5m_start(latest_1m)
         # Freshness for 5m in RTH should follow completed-bucket semantics rather than wall-clock age.
@@ -233,6 +273,10 @@ def evaluate_context_readiness(
             ora=False,
             atr=False,
             session_day=latest_session,
+            expected_1m=expected_1m_start,
+            stale_1m_ref=stale_1m_ref,
+            stale_1m_secs=stale_1m_seconds,
+            stale_1m_flag=stale_1m,
             expected_5m=expected_5m_start,
             stale_ref=stale_5m_ref,
             stale_seconds=stale_5m_seconds,
@@ -252,6 +296,10 @@ def evaluate_context_readiness(
             ora=False,
             atr=False,
             session_day=latest_session,
+            expected_1m=expected_1m_start,
+            stale_1m_ref=stale_1m_ref,
+            stale_1m_secs=stale_1m_seconds,
+            stale_1m_flag=stale_1m,
             expected_5m=expected_5m_start,
             stale_ref=stale_5m_ref,
             stale_seconds=stale_5m_seconds,
@@ -298,6 +346,10 @@ def evaluate_context_readiness(
             ora=or_ok,
             atr=atr_ok,
             session_day=latest_session,
+            expected_1m=expected_1m_start,
+            stale_1m_ref=stale_1m_ref,
+            stale_1m_secs=stale_1m_seconds,
+            stale_1m_flag=stale_1m,
             expected_5m=expected_5m_start,
             stale_ref=stale_5m_ref,
             stale_seconds=stale_5m_seconds,
@@ -318,6 +370,10 @@ def evaluate_context_readiness(
             ora=or_ok,
             atr=atr_ok,
             session_day=latest_session,
+            expected_1m=expected_1m_start,
+            stale_1m_ref=stale_1m_ref,
+            stale_1m_secs=stale_1m_seconds,
+            stale_1m_flag=stale_1m,
             expected_5m=expected_5m_start,
             stale_ref=stale_5m_ref,
             stale_seconds=stale_5m_seconds,
@@ -337,6 +393,10 @@ def evaluate_context_readiness(
         ora=or_ok,
         atr=atr_ok,
         session_day=latest_session,
+        expected_1m=expected_1m_start,
+        stale_1m_ref=stale_1m_ref,
+        stale_1m_secs=stale_1m_seconds,
+        stale_1m_flag=stale_1m,
         expected_5m=expected_5m_start,
         stale_ref=stale_5m_ref,
         stale_seconds=stale_5m_seconds,
