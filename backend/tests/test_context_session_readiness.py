@@ -157,6 +157,56 @@ class ContextSessionReadinessTests(unittest.TestCase):
         self.assertFalse(out.context_ready_for_analysis)
         self.assertEqual(out.block_reason_analysis, "prior_session_data")
 
+    def test_after_close_disconnected_stream_still_allows_analysis_from_persisted_session(self) -> None:
+        now = datetime(2026, 4, 21, 22, 30, 0, tzinfo=timezone.utc)  # 18:30 ET
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(connected=False, subscribed=False),
+            now=now,
+        )
+        self.assertFalse(out.us_equity_rth_open)
+        self.assertFalse(out.context_ready_for_live_trading)
+        self.assertTrue(out.context_ready_for_analysis)
+        self.assertEqual(out.block_reason, "market_closed")
+        self.assertEqual(out.block_reason_analysis, "latest_session_complete")
+
+    def test_rth_5m_freshness_uses_latest_completed_bucket_semantics(self) -> None:
+        now = datetime(2026, 4, 21, 18, 3, 0, tzinfo=timezone.utc)  # 14:03 ET
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= datetime(2026, 4, 21, 18, 2, 0, tzinfo=timezone.utc)]
+        # Keep 5m up through 17:55 (latest completed bucket for latest_1m=18:02).
+        b5 = [x for x in b5 if x.bar_time <= datetime(2026, 4, 21, 17, 55, 0, tzinfo=timezone.utc)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertNotEqual(out.block_reason, "stale_5m_bars")
+
+    def test_rth_lagging_5m_remains_stale(self) -> None:
+        now = datetime(2026, 4, 21, 18, 3, 0, tzinfo=timezone.utc)  # 14:03 ET
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= datetime(2026, 4, 21, 18, 2, 0, tzinfo=timezone.utc)]
+        # Lag one extra bucket behind expected latest completed (17:50 only).
+        b5 = [x for x in b5 if x.bar_time <= datetime(2026, 4, 21, 17, 50, 0, tzinfo=timezone.utc)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertEqual(out.block_reason, "stale_5m_bars")
+        self.assertEqual(out.block_reason_analysis, "stale_5m_bars")
+
 
 if __name__ == "__main__":
     unittest.main()

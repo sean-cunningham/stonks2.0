@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.core.config import Settings
 from app.models.bars import IntradayBar
@@ -23,6 +23,19 @@ def _as_utc_aware(dt: datetime | None) -> datetime | None:
 
 def _dxlink_bars_only(bars: list[IntradayBar]) -> list[IntradayBar]:
     return [b for b in bars if (b.source_status or "").startswith(DXLINK_BAR_SOURCE)]
+
+
+def _expected_latest_completed_5m_start(latest_1m: datetime) -> datetime:
+    """
+    Map latest completed 1m timestamp to the expected latest *completed* 5m bucket start.
+
+    Bars are labeled by bucket-start time. If latest 1m is e.g. 14:02, the latest completed
+    5m bucket is 13:55 (the 14:00..14:04 bucket is still in progress).
+    """
+    if latest_1m.tzinfo is None:
+        latest_1m = latest_1m.replace(tzinfo=timezone.utc)
+    floored = latest_1m.replace(minute=(latest_1m.minute // 5) * 5, second=0, microsecond=0)
+    return floored - timedelta(minutes=5)
 
 
 @dataclass
@@ -178,23 +191,11 @@ def evaluate_context_readiness(
     age_5m = (current - latest_5m).total_seconds() if latest_5m else None
     stale_1m = age_1m is None or age_1m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_1M
     stale_5m = age_5m is None or age_5m > settings.CONTEXT_BAR_MAX_STALENESS_SECONDS_5M
+    if rth_open and latest_1m is not None and latest_5m is not None:
+        expected_5m_start = _expected_latest_completed_5m_start(latest_1m)
+        # Freshness for 5m in RTH should follow completed-bucket semantics rather than wall-clock age.
+        stale_5m = latest_5m < expected_5m_start
 
-    # During RTH, live readiness remains strict and stream connectivity matters.
-    if rth_open and not (dxlink.connected and dxlink.subscribed):
-        return _readiness(
-            live=False,
-            analysis=False,
-            block="dxlink_not_connected",
-            block_a="dxlink_not_connected",
-            latest_1m=latest_1m,
-            latest_5m=latest_5m,
-            b1a=bool(b1),
-            b5a=bool(b5),
-            vwap=False,
-            ora=False,
-            atr=False,
-            session_day=latest_session,
-        )
     if rth_open and stale_1m:
         return _readiness(
             live=False,
