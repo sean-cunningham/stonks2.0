@@ -1,19 +1,29 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from sqlalchemy.orm import Session
 
 from app.api.context import router as context_router
+from app.api.debug_dxlink import router as debug_dxlink_router
 from app.api.health import get_health
 from app.api.market import router as market_router
 from app.api.system import get_config, get_status, get_strategies
 from app.core.config import get_settings
-from app.core.database import Base, check_database_connectivity, engine, ensure_market_snapshot_schema, get_db
+from app.core.database import (
+    Base,
+    check_database_connectivity,
+    delete_legacy_spy_intraday_bars,
+    engine,
+    ensure_market_snapshot_schema,
+    get_db,
+)
 from app.core.logging import configure_logging
 from app.jobs.context_refresh import run_startup_context_refresh
 from app.jobs.market_refresh import run_startup_market_refresh
 from app.schemas.health import HealthResponse
 from app.schemas.system import ConfigResponse, StrategiesResponse, SystemStatusResponse
+from app.services.broker.dxlink_spy_candle_streamer import get_spy_candle_streamer
 
 # Import models so SQLAlchemy metadata includes all tables on startup.
 from app.models import bars, journal, market, strategy, trade  # noqa: F401
@@ -22,23 +32,32 @@ settings = get_settings()
 configure_logging(settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title=settings.APP_NAME)
-app.include_router(market_router)
-app.include_router(context_router)
 
-
-@app.on_event("startup")
-def on_startup() -> None:
-    """Initialize database and report startup status."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Database init, legacy bar cleanup, market snapshot refresh, DXLink streamer."""
+    s = get_settings()
     Base.metadata.create_all(bind=engine)
     ensure_market_snapshot_schema()
+    removed = delete_legacy_spy_intraday_bars()
+    logger.info("Legacy SPY intraday bar cleanup removed_rows=%s", removed)
     db_ok = check_database_connectivity()
-    logger.info("Starting %s", settings.APP_NAME)
-    logger.info("Environment=%s mode=%s", settings.APP_ENV, settings.APP_MODE)
+    logger.info("Starting %s", s.APP_NAME)
+    logger.info("Environment=%s mode=%s", s.APP_ENV, s.APP_MODE)
     logger.info("Database connectivity=%s", db_ok)
-    run_startup_market_refresh(settings)
-    run_startup_context_refresh(settings)
+    run_startup_market_refresh(s)
+    streamer = get_spy_candle_streamer(s)
+    streamer.start()
+    run_startup_context_refresh(s)
     logger.info("Strategy execution and paper execution layers are not implemented yet.")
+    yield
+    streamer.stop()
+
+
+app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
+app.include_router(market_router)
+app.include_router(context_router)
+app.include_router(debug_dxlink_router)
 
 
 @app.get("/health", response_model=HealthResponse)

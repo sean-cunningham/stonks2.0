@@ -34,6 +34,25 @@ class BarsRepository:
         rows.reverse()
         return rows
 
+    def list_spy_1m_in_half_open_range(
+        self,
+        *,
+        bucket_start: datetime,
+        bucket_end: datetime,
+    ) -> list[IntradayBar]:
+        """1m SPY bars with bar_time in [bucket_start, bucket_end), oldest first."""
+        stmt = (
+            select(IntradayBar)
+            .where(
+                IntradayBar.symbol == "SPY",
+                IntradayBar.timeframe == "1m",
+                IntradayBar.bar_time >= bucket_start,
+                IntradayBar.bar_time < bucket_end,
+            )
+            .order_by(IntradayBar.bar_time.asc())
+        )
+        return list(self._db.scalars(stmt).all())
+
     def upsert_bars(self, bars: list[IntradayBar]) -> int:
         """Insert or update bars by (symbol, timeframe, bar_time)."""
         count = 0

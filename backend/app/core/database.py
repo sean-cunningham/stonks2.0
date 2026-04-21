@@ -35,6 +35,25 @@ def check_database_connectivity() -> bool:
         return False
 
 
+def delete_legacy_spy_intraday_bars() -> int:
+    """
+    Remove SPY 1m/5m rows that are not from the DXLink candle pipeline.
+
+    Prevents Yahoo or REST snapshot bars from affecting context readiness.
+    """
+    prefix = "tastytrade_dxlink_candle"
+    with engine.begin() as connection:
+        result = connection.execute(
+            text(
+                "DELETE FROM intraday_bars WHERE symbol = 'SPY' "
+                "AND timeframe IN ('1m', '5m') "
+                "AND (source_status IS NULL OR source_status NOT LIKE :pfx)"
+            ),
+            {"pfx": f"{prefix}%"},
+        )
+        return int(result.rowcount or 0)
+
+
 def ensure_market_snapshot_schema() -> None:
     """Backfill additive columns for local SQLite scaffold updates."""
     if not settings.DATABASE_URL.startswith("sqlite"):

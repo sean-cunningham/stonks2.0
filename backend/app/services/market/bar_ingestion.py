@@ -1,4 +1,4 @@
-"""Fetch and persist SPY intraday bars from real sources (no synthetic data)."""
+"""SPY intraday bars: 1m from DXLink streamer only; 5m derived locally (recompute here)."""
 
 from __future__ import annotations
 
@@ -7,48 +7,13 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.models.bars import IntradayBar
-from app.repositories.bars_repository import BarsRepository
-from app.services.broker.tastytrade_auth import BrokerAuthError, TastytradeAuthService
-from app.services.market.adapters import tastytrade_intraday_bars, yahoo_finance_chart_bars
+from app.services.market.bar_aggregate import DXLINK_BAR_SOURCE, reaggregate_spy_5m_from_db
 
 logger = logging.getLogger(__name__)
 
 
 class BarIngestionError(Exception):
-    """Raised when no real bar source produced data."""
-
-
-def _fetch_yahoo(settings: Settings) -> tuple[list[IntradayBar], list[IntradayBar]]:
-    bars_1m = yahoo_finance_chart_bars.fetch_spy_yahoo_bars(
-        interval="1m",
-        range_param=settings.SPY_YAHOO_CHART_RANGE,
-        user_agent=settings.YAHOO_CHART_USER_AGENT,
-    )
-    bars_5m = yahoo_finance_chart_bars.fetch_spy_yahoo_bars(
-        interval="5m",
-        range_param=settings.SPY_YAHOO_CHART_RANGE,
-        user_agent=settings.YAHOO_CHART_USER_AGENT,
-    )
-    return bars_1m, bars_5m
-
-
-def _fetch_tastytrade(settings: Settings) -> tuple[list[IntradayBar], list[IntradayBar]]:
-    auth = TastytradeAuthService(settings)
-    if not auth.has_credentials() or not settings.TASTYTRADE_API_BASE_URL:
-        return [], []
-    token = auth.get_access_token()
-    bars_1m = tastytrade_intraday_bars.fetch_spy_tastytrade_bars(
-        api_base_url=settings.TASTYTRADE_API_BASE_URL,
-        access_token=token.access_token,
-        interval="1m",
-    )
-    bars_5m = tastytrade_intraday_bars.fetch_spy_tastytrade_bars(
-        api_base_url=settings.TASTYTRADE_API_BASE_URL,
-        access_token=token.access_token,
-        interval="5m",
-    )
-    return bars_1m, bars_5m
+    """Raised when bar maintenance cannot run (e.g. database error)."""
 
 
 def ingest_spy_intraday(
@@ -56,49 +21,17 @@ def ingest_spy_intraday(
     settings: Settings,
 ) -> tuple[int, int, str]:
     """
-    Fetch 1m and 5m SPY bars and persist.
+    Recompute 5m bars from persisted 1m DXLink bars (no external HTTP).
 
-    Returns (count_1m, count_5m, bars_source_label).
+    Returns (bars_1m_written, bars_5m_written, bars_source_label).
     """
-    mode = settings.SPY_INTRADAY_BARS_SOURCE
-    bars_1m: list[IntradayBar] = []
-    bars_5m: list[IntradayBar] = []
-    used_source = "none"
-
-    if mode == "yahoo":
-        bars_1m, bars_5m = _fetch_yahoo(settings)
-        used_source = "yahoo_finance_chart_v8"
-    elif mode == "tastytrade":
-        try:
-            bars_1m, bars_5m = _fetch_tastytrade(settings)
-        except BrokerAuthError as exc:
-            raise BarIngestionError(str(exc)) from exc
-        used_source = "tastytrade_rest"
-    else:
-        # auto: prefer Tastytrade REST if credentials yield bars; else Yahoo.
-        try:
-            bars_1m, bars_5m = _fetch_tastytrade(settings)
-            if bars_1m and bars_5m:
-                used_source = "tastytrade_rest"
-        except BrokerAuthError as exc:
-            logger.info("Tastytrade bars unavailable in auto mode: %s", exc)
-        if not bars_1m or not bars_5m:
-            bars_1m, bars_5m = _fetch_yahoo(settings)
-            used_source = "yahoo_finance_chart_v8"
-
-    if not bars_1m or not bars_5m:
-        raise BarIngestionError("no_real_bars_available")
-
-    cap = settings.CONTEXT_MAX_BARS_PERSISTED_PER_TF
-    if cap > 0:
-        bars_1m = bars_1m[-cap:]
-        bars_5m = bars_5m[-cap:]
-
-    repo = BarsRepository(db)
-    n1 = repo.upsert_bars(bars_1m)
-    n5 = repo.upsert_bars(bars_5m)
-    logger.info("SPY bar ingestion complete source=%s 1m=%s 5m=%s", used_source, n1, n5)
-    return n1, n5, used_source
+    try:
+        n5 = reaggregate_spy_5m_from_db(db, max_1m=settings.CONTEXT_MAX_BARS_PERSISTED_PER_TF)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("SPY 5m reaggregation failed: %s", exc)
+        raise BarIngestionError("reaggregate_failed") from exc
+    logger.info("SPY bar reaggregation complete 5m_written=%s source=%s", n5, DXLINK_BAR_SOURCE)
+    return 0, n5, DXLINK_BAR_SOURCE
 
 
 def ingest_spy_intraday_safe(
@@ -109,5 +42,5 @@ def ingest_spy_intraday_safe(
     try:
         return ingest_spy_intraday(db, settings)
     except BarIngestionError as exc:
-        logger.warning("SPY bar ingestion failed: %s", exc)
+        logger.warning("SPY bar reaggregation failed: %s", exc)
         return 0, 0, f"failed:{exc}"

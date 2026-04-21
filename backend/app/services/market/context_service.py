@@ -11,9 +11,15 @@ from app.core.config import Settings
 from app.repositories.bars_repository import BarsRepository
 from app.schemas.bars import BarListResponse, BarRow
 from app.schemas.context import ContextRefreshResponse, ContextStatusResponse, ContextSummaryResponse
+from app.services.broker.dxlink_spy_candle_streamer import get_spy_candle_streamer
 from app.services.market import bar_ingestion, context_calculator, context_status
+from app.services.market.bar_aggregate import DXLINK_BAR_SOURCE
 
 logger = logging.getLogger(__name__)
+
+
+def _dxlink_bars(bars: list) -> list:
+    return [b for b in bars if (b.source_status or "").startswith(DXLINK_BAR_SOURCE)]
 
 
 class ContextService:
@@ -24,10 +30,20 @@ class ContextService:
         self._settings = settings
         self._bars = BarsRepository(db)
 
+    def _dxlink_health(self):
+        return get_spy_candle_streamer(self._settings).health_snapshot()
+
     def _load_bars(self, limit: int = 120) -> tuple[list, list]:
         one = self._bars.list_recent_bars(symbol="SPY", timeframe="1m", limit=limit)
         five = self._bars.list_recent_bars(symbol="SPY", timeframe="5m", limit=limit)
         return one, five
+
+    def _bars_source_label(self, bars_1m: list, bars_5m: list) -> str:
+        if _dxlink_bars(bars_1m) or _dxlink_bars(bars_5m):
+            return DXLINK_BAR_SOURCE
+        if self._dxlink_health().subscribed:
+            return DXLINK_BAR_SOURCE
+        return "none"
 
     def get_status(self) -> ContextStatusResponse:
         bars_1m, bars_5m = self._load_bars()
@@ -35,8 +51,9 @@ class ContextService:
             bars_1m=bars_1m,
             bars_5m=bars_5m,
             settings=self._settings,
+            dxlink=self._dxlink_health(),
         )
-        source = context_calculator.bars_source_from_rows(bars_1m or bars_5m)
+        source = self._bars_source_label(bars_1m, bars_5m)
         return ContextStatusResponse(
             symbol="SPY",
             context_ready=readiness.context_ready,
@@ -61,7 +78,8 @@ class ContextService:
         return self._to_bar_list(bars, "5m")
 
     def _to_bar_list(self, bars: list, timeframe: str) -> BarListResponse:
-        source = context_calculator.bars_source_from_rows(bars)
+        one, five = self._load_bars()
+        source = self._bars_source_label(one, five)
         return BarListResponse(
             symbol="SPY",
             timeframe=timeframe,
@@ -85,18 +103,21 @@ class ContextService:
 
     def get_summary(self) -> ContextSummaryResponse:
         bars_1m, bars_5m = self._load_bars()
+        b1 = _dxlink_bars(bars_1m)
+        b5 = _dxlink_bars(bars_5m)
         readiness = context_status.evaluate_context_readiness(
             bars_1m=bars_1m,
             bars_5m=bars_5m,
             settings=self._settings,
+            dxlink=self._dxlink_health(),
         )
         metrics = context_calculator.compute_context_metrics(
-            bars_1m=bars_1m,
-            bars_5m=bars_5m,
+            bars_1m=b1 or bars_1m,
+            bars_5m=b5 or bars_5m,
             now=datetime.now(timezone.utc),
             opening_range_minutes=self._settings.OPENING_RANGE_MINUTES,
         )
-        source = context_calculator.bars_source_from_rows(bars_1m or bars_5m)
+        source = self._bars_source_label(bars_1m, bars_5m)
         return ContextSummaryResponse(
             symbol="SPY",
             latest_price=metrics.latest_price,
@@ -119,10 +140,10 @@ class ContextService:
         )
 
     def refresh(self) -> ContextRefreshResponse:
-        """Fetch bars, persist, recompute readiness and summary."""
+        """Recompute 5m from persisted 1m and return readiness."""
         try:
             n1, n5, src = bar_ingestion.ingest_spy_intraday(self._db, self._settings)
-            refreshed = n1 > 0 and n5 > 0
+            refreshed = n5 > 0
         except bar_ingestion.BarIngestionError as exc:
             logger.warning("Context refresh failed: %s", exc)
             n1, n5, src = 0, 0, f"failed:{exc}"
@@ -130,7 +151,6 @@ class ContextService:
 
         status = self.get_status()
         summary = self.get_summary()
-        # Reflect actual provider on summary/status when ingest succeeded
         if refreshed:
             summary = summary.model_copy(update={"bars_source": src, "source_status": status.source_status})
             status = status.model_copy(update={"bars_source": src})
