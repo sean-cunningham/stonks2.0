@@ -8,6 +8,7 @@ from app.api.context import router as context_router
 from app.api.debug_dxlink import router as debug_dxlink_router
 from app.api.health import get_health
 from app.api.market import router as market_router
+from app.api.strategy_one import router as strategy_one_router
 from app.api.system import get_config, get_status, get_strategies
 from app.core.config import get_settings
 from app.core.database import (
@@ -50,7 +51,7 @@ async def lifespan(app: FastAPI):
     streamer.hydrate_from_persisted_db()
     streamer.start()
     run_startup_context_refresh(s)
-    logger.info("Strategy execution and paper execution layers are not implemented yet.")
+    logger.info("Strategy 1 read-only evaluation is available; execution and paper trading are not implemented yet.")
     yield
     streamer.stop()
 
@@ -59,6 +60,7 @@ app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 app.include_router(market_router)
 app.include_router(context_router)
 app.include_router(debug_dxlink_router)
+app.include_router(strategy_one_router)
 
 
 @app.get("/health", response_model=HealthResponse)
