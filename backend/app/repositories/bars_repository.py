@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.models.bars import IntradayBar
 
+_DXLINK_1M_SOURCE_PREFIX = "tastytrade_dxlink_candle"
+
 
 class BarsRepository:
     """CRUD helpers for IntradayBar rows."""
@@ -27,6 +29,40 @@ class BarsRepository:
         stmt = (
             select(IntradayBar)
             .where(IntradayBar.symbol == symbol, IntradayBar.timeframe == timeframe)
+            .order_by(IntradayBar.bar_time.desc())
+            .limit(limit)
+        )
+        rows = list(self._db.scalars(stmt).all())
+        rows.reverse()
+        return rows
+
+    def latest_spy_1m_dxlink(self) -> IntradayBar | None:
+        """
+        Newest SPY 1m bar from the DXLink candle pipeline (truth for debug watermarks).
+
+        Orders by bar_time descending; filters symbol, timeframe, and source_status prefix.
+        """
+        stmt = (
+            select(IntradayBar)
+            .where(
+                IntradayBar.symbol == "SPY",
+                IntradayBar.timeframe == "1m",
+                IntradayBar.source_status.like(f"{_DXLINK_1M_SOURCE_PREFIX}%"),
+            )
+            .order_by(IntradayBar.bar_time.desc())
+            .limit(1)
+        )
+        return self._db.scalar(stmt)
+
+    def list_recent_spy_1m_dxlink(self, *, limit: int = 120) -> list[IntradayBar]:
+        """Most recent SPY 1m DXLink bars, oldest first within the window (same shape as list_recent_bars)."""
+        stmt = (
+            select(IntradayBar)
+            .where(
+                IntradayBar.symbol == "SPY",
+                IntradayBar.timeframe == "1m",
+                IntradayBar.source_status.like(f"{_DXLINK_1M_SOURCE_PREFIX}%"),
+            )
             .order_by(IntradayBar.bar_time.desc())
             .limit(limit)
         )

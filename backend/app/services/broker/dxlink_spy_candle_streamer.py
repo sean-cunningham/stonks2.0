@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import threading
-from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -56,6 +55,11 @@ CANDLE_FIELD_COUNT = len(CANDLE_ACCEPT_EVENT_FIELDS)
 
 # dxfeed IndexedEvent flags (subset)
 REMOVE_EVENT = 0x2
+SNAPSHOT_END = 0x8
+SNAPSHOT_SNIP = 0x10
+
+# Debug / health: parser identifier for API clients
+CANDLE_PARSER_MODE = "candle_compact_v1_18fields_sdk_order"
 
 _spy_streamer_lock = threading.Lock()
 _spy_streamer: DxLinkSpyCandleStreamer | None = None
@@ -74,6 +78,14 @@ class DxLinkHealthSnapshot:
     reconnect_count: int
     source_status: str
     last_error: str | None
+    subscribed_symbol: str
+    event_type: str
+    parser_mode: str
+    latest_raw_period_time: datetime | None
+    latest_raw_event_time: datetime | None
+    latest_raw_close: float | None
+    latest_persisted_1m_bar_time: datetime | None
+    latest_persisted_1m_close: float | None
 
 
 @dataclass
@@ -100,12 +112,16 @@ class DxLinkSpyCandleStreamer:
     _connected: bool = False
     _subscribed: bool = False
     _last_message_time: datetime | None = None
-    _last_candle_time: datetime | None = None
     _quote_token_present: bool = False
     _dxlink_url_present: bool = False
     _reconnect_count: int = 0
     _last_error: str | None = None
-    _raw_events: deque[list[Any]] = field(default_factory=lambda: deque(maxlen=24), repr=False)
+    _last_candle_period_ms_max: int = 0
+    _last_persisted_1m_bar_time: datetime | None = None
+    _last_persisted_1m_close: float | None = None
+    # Latest candle rows keyed by period start (time ms); trimmed to recent keys only.
+    _debug_by_period_ms: dict[int, dict[str, Any]] = field(default_factory=dict, repr=False)
+    _debug_max_periods: int = 256
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -123,22 +139,83 @@ class DxLinkSpyCandleStreamer:
 
     def health_snapshot(self) -> DxLinkHealthSnapshot:
         with self._state_lock:
+            stream_latest = self._latest_raw_period_time_locked()
+            persisted_t = self._last_persisted_1m_bar_time
+            last_candle = stream_latest
+            if persisted_t is not None and (last_candle is None or persisted_t > last_candle):
+                last_candle = persisted_t
+            latest_raw_period = stream_latest
+            latest_raw_evt = self._latest_raw_event_time_locked()
+            latest_raw_close = self._latest_raw_close_locked()
             return DxLinkHealthSnapshot(
                 connected=self._connected,
                 subscribed=self._subscribed,
                 last_message_time=self._last_message_time,
-                last_candle_time=self._last_candle_time,
+                last_candle_time=last_candle,
                 quote_token_present=self._quote_token_present,
                 dxlink_url_present=self._dxlink_url_present,
                 reconnect_count=self._reconnect_count,
                 source_status=self._source_status_locked(),
                 last_error=self._last_error,
+                subscribed_symbol=SPY_CANDLE_SYMBOL,
+                event_type="Candle",
+                parser_mode=CANDLE_PARSER_MODE,
+                latest_raw_period_time=latest_raw_period,
+                latest_raw_event_time=latest_raw_evt,
+                latest_raw_close=latest_raw_close,
+                latest_persisted_1m_bar_time=persisted_t,
+                latest_persisted_1m_close=self._last_persisted_1m_close,
             )
 
-    def recent_raw_candles(self, limit: int = 12) -> list[list[Any]]:
+    def _latest_raw_event_time_locked(self) -> datetime | None:
+        if not self._debug_by_period_ms:
+            return None
+        best: datetime | None = None
+        for row in self._debug_by_period_ms.values():
+            et = row.get("event_time_utc")
+            if isinstance(et, datetime) and (best is None or et > best):
+                best = et
+        return best
+
+    def _latest_raw_period_time_locked(self) -> datetime | None:
+        if self._last_candle_period_ms_max <= 0:
+            return None
+        return datetime.fromtimestamp(self._last_candle_period_ms_max / 1000.0, tz=timezone.utc)
+
+    def _latest_raw_close_locked(self) -> float | None:
+        if not self._debug_by_period_ms:
+            return None
+        max_ms = max(self._debug_by_period_ms.keys())
+        row = self._debug_by_period_ms.get(max_ms)
+        if not row:
+            return None
+        c = row.get("close")
+        return float(c) if c is not None else None
+
+    def recent_decoded_candles(self, limit: int = 12) -> list[dict[str, Any]]:
+        """Most recent candle periods by `time` (period start), newest last."""
         with self._state_lock:
-            out = list(self._raw_events)
-        return out[-limit:] if limit else out
+            keys = sorted(self._debug_by_period_ms.keys())
+            chosen = keys[-limit:] if limit else keys
+            return [self._debug_by_period_ms[k] for k in chosen]
+
+    def hydrate_from_persisted_db(self) -> None:
+        """Align streamer watermarks with latest DXLink 1m row after process restart."""
+        db = SessionLocal()
+        try:
+            repo = BarsRepository(db)
+            b = repo.latest_spy_1m_dxlink()
+            if b is None:
+                return
+            bt = b.bar_time if b.bar_time.tzinfo else b.bar_time.replace(tzinfo=timezone.utc)
+            bt = bt.astimezone(timezone.utc)
+            period_ms = int(bt.timestamp() * 1000)
+            with self._state_lock:
+                self._last_persisted_1m_bar_time = bt
+                self._last_persisted_1m_close = float(b.close)
+                self._last_candle_period_ms_max = max(self._last_candle_period_ms_max, period_ms)
+        finally:
+            db.close()
 
     def _source_status_locked(self) -> str:
         if self._connected and self._subscribed:
@@ -289,6 +366,9 @@ class DxLinkSpyCandleStreamer:
 
     async def _receive_loop(self, ws: Any) -> None:
         current: _MinuteBuffer | None = None
+        with self._state_lock:
+            self._last_candle_period_ms_max = 0
+            self._debug_by_period_ms.clear()
         while not self._stop.is_set():
             try:
                 payload = await asyncio.wait_for(ws.recv(), timeout=75.0)
@@ -330,7 +410,6 @@ class DxLinkSpyCandleStreamer:
             if event_name != "Candle" or not isinstance(body, list):
                 continue
             for candle in self._iter_compact_candles(body):
-                self._record_raw_sample(candle)
                 try:
                     ev_flags = int(float(candle.get("eventFlags") or 0))
                 except (TypeError, ValueError):
@@ -351,13 +430,33 @@ class DxLinkSpyCandleStreamer:
                 sym = str(candle.get("eventSymbol") or "")
                 vol = self._to_float(candle.get("volume"))
 
+                event_time_ms = self._to_int(candle.get("eventTime"))
+                period_dt = datetime.fromtimestamp(time_ms / 1000.0, tz=timezone.utc)
+                event_dt = (
+                    datetime.fromtimestamp(event_time_ms / 1000.0, tz=timezone.utc)
+                    if event_time_ms is not None
+                    else None
+                )
+                self._merge_debug_candle(
+                    time_ms=time_ms,
+                    event_time_ms=event_time_ms,
+                    event_flags=ev_flags,
+                    event_symbol=sym,
+                    period_utc=period_dt,
+                    event_time_utc=event_dt,
+                    open_=o,
+                    high=h,
+                    low=low,
+                    close_=c,
+                    volume=vol,
+                )
+
                 with self._state_lock:
-                    self._last_candle_time = datetime.fromtimestamp(time_ms / 1000.0, tz=timezone.utc)
+                    self._last_candle_period_ms_max = max(self._last_candle_period_ms_max, time_ms)
 
                 if current is None:
                     current = _MinuteBuffer(time_ms, sym, o, h, low, c, vol)
-                    continue
-                if time_ms != current.time_ms:
+                elif time_ms != current.time_ms:
                     self._persist_completed_minute(current)
                     current = _MinuteBuffer(time_ms, sym, o, h, low, c, vol)
                 else:
@@ -367,10 +466,54 @@ class DxLinkSpyCandleStreamer:
                     current.close = c if c is not None else current.close
                     current.volume = vol
 
-    def _record_raw_sample(self, candle: dict[str, Any]) -> None:
-        row = [candle.get(k) for k in CANDLE_ACCEPT_EVENT_FIELDS]
+                if ev_flags & (SNAPSHOT_END | SNAPSHOT_SNIP):
+                    self._trim_debug_stale()
+
+    def _merge_debug_candle(
+        self,
+        *,
+        time_ms: int,
+        event_time_ms: int | None,
+        event_flags: int,
+        event_symbol: str,
+        period_utc: datetime,
+        event_time_utc: datetime | None,
+        open_: float,
+        high: float,
+        low: float,
+        close_: float,
+        volume: float | None,
+    ) -> None:
+        row: dict[str, Any] = {
+            "eventSymbol": event_symbol,
+            "time_ms": time_ms,
+            "period_time_utc": period_utc,
+            "event_time_ms": event_time_ms,
+            "event_time_utc": event_time_utc,
+            "eventFlags": event_flags,
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close_,
+            "volume": volume,
+            "parser_mode": CANDLE_PARSER_MODE,
+        }
         with self._state_lock:
-            self._raw_events.append(row)
+            self._debug_by_period_ms[time_ms] = row
+            if len(self._debug_by_period_ms) > self._debug_max_periods:
+                for k in sorted(self._debug_by_period_ms.keys())[: -self._debug_max_periods]:
+                    del self._debug_by_period_ms[k]
+
+    def _trim_debug_stale(self) -> None:
+        """After snapshot end, drop very old period keys vs newest (replay noise)."""
+        with self._state_lock:
+            if not self._debug_by_period_ms:
+                return
+            hi = max(self._debug_by_period_ms.keys())
+            cutoff = hi - 7 * 24 * 3600 * 1000
+            for k in list(self._debug_by_period_ms.keys()):
+                if k < cutoff:
+                    del self._debug_by_period_ms[k]
 
     def _persist_completed_minute(self, buf: _MinuteBuffer) -> None:
         bar_time = datetime.fromtimestamp(buf.time_ms / 1000.0, tz=timezone.utc)
@@ -389,6 +532,13 @@ class DxLinkSpyCandleStreamer:
         try:
             repo = BarsRepository(db)
             repo.upsert_bars([bar])
+            bt_aware = bar_time if bar_time.tzinfo else bar_time.replace(tzinfo=timezone.utc)
+            bt_aware = bt_aware.astimezone(timezone.utc)
+            with self._state_lock:
+                prev = self._last_persisted_1m_bar_time
+                if prev is None or bt_aware >= prev.astimezone(timezone.utc):
+                    self._last_persisted_1m_bar_time = bt_aware
+                    self._last_persisted_1m_close = float(buf.close)
             bucket = five_minute_bucket_start_utc(bar_time)
             bucket_end = bucket + timedelta(minutes=5)
             one_m = repo.list_spy_1m_in_half_open_range(bucket_start=bucket, bucket_end=bucket_end)

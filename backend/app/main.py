@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI):
     logger.info("Database connectivity=%s", db_ok)
     run_startup_market_refresh(s)
     streamer = get_spy_candle_streamer(s)
+    streamer.hydrate_from_persisted_db()
     streamer.start()
     run_startup_context_refresh(s)
     logger.info("Strategy execution and paper execution layers are not implemented yet.")
