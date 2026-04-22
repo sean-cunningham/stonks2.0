@@ -99,3 +99,32 @@ def ensure_paper_trade_schema() -> None:
         for column, ddl_type in expected_columns.items():
             if column not in existing:
                 connection.execute(text(f"ALTER TABLE paper_trades ADD COLUMN {column} {ddl_type}"))
+
+
+def ensure_paper_trade_open_contract_unique_index() -> None:
+    """SQLite: at most one OPEN row per (strategy_id, option_symbol, side).
+
+    Non-SQLite URLs skip this DDL; duplicate-open is still enforced in the service layer.
+    """
+    if not settings.DATABASE_URL.startswith("sqlite"):
+        return
+    with engine.begin() as connection:
+        table = connection.execute(
+            text("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'")
+        ).fetchone()
+        if not table:
+            return
+        idx = connection.execute(
+            text(
+                "SELECT 1 FROM sqlite_master WHERE type='index' "
+                "AND name='uq_paper_trades_open_contract'"
+            )
+        ).fetchone()
+        if idx:
+            return
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_paper_trades_open_contract "
+                "ON paper_trades (strategy_id, option_symbol, side) WHERE status = 'open'"
+            )
+        )

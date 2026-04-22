@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.trade import PaperTrade, PaperTradeEvent
@@ -16,7 +17,11 @@ class PaperTradeRepository:
 
     def create_trade(self, row: PaperTrade) -> PaperTrade:
         self._db.add(row)
-        self._db.commit()
+        try:
+            self._db.commit()
+        except IntegrityError:
+            self._db.rollback()
+            raise
         self._db.refresh(row)
         return row
 
@@ -29,15 +34,14 @@ class PaperTradeRepository:
     def get_trade(self, trade_id: int) -> PaperTrade | None:
         return self._db.get(PaperTrade, trade_id)
 
-    def has_open_duplicate_fingerprint(
+    def has_open_position_for_contract(
         self,
         *,
         strategy_id: str,
         option_symbol: str,
         side: str,
-        entry_evaluation_fingerprint: str,
     ) -> bool:
-        """True if an open paper trade already exists for this dedupe identity."""
+        """True if a paper trade is already open for this strategy/contract/side (any fingerprint)."""
         stmt = (
             select(PaperTrade.id)
             .where(
@@ -45,7 +49,6 @@ class PaperTradeRepository:
                 PaperTrade.option_symbol == option_symbol,
                 PaperTrade.side == side,
                 PaperTrade.status == "open",
-                PaperTrade.entry_evaluation_fingerprint == entry_evaluation_fingerprint,
             )
             .limit(1)
         )

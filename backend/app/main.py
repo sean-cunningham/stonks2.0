@@ -19,6 +19,7 @@ from app.core.database import (
     engine,
     ensure_market_snapshot_schema,
     ensure_paper_trade_schema,
+    ensure_paper_trade_open_contract_unique_index,
     get_db,
 )
 from app.core.logging import configure_logging
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     ensure_market_snapshot_schema()
     ensure_paper_trade_schema()
+    ensure_paper_trade_open_contract_unique_index()
     removed = delete_legacy_spy_intraday_bars()
     logger.info("Legacy SPY intraday bar cleanup removed_rows=%s", removed)
     db_ok = check_database_connectivity()

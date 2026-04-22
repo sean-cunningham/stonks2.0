@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -21,6 +23,17 @@ from app.services.paper.paper_trade_service import (
     PaperTradeService,
 )
 import app.models.trade  # noqa: F401
+
+
+def _ensure_open_contract_unique_index(engine: Engine) -> None:
+    """Apply the same partial unique index as production (tests use a separate in-memory engine)."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_trades_open_contract "
+                "ON paper_trades (strategy_id, option_symbol, side) WHERE status = 'open'"
+            )
+        )
 
 
 def _fresh_chain(
@@ -193,6 +206,7 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
             poolclass=StaticPool,
         )
         Base.metadata.create_all(bind=self.engine)
+        _ensure_open_contract_unique_index(self.engine)
         self.Session = sessionmaker(bind=self.engine, autocommit=False, autoflush=False)
         self.settings = Settings(MARKET_CHAIN_MAX_AGE_SECONDS=60, MARKET_QUOTE_MAX_AGE_SECONDS=15)
         self.svc = PaperTradeService()
@@ -376,27 +390,30 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
         finally:
             db.close()
 
-    def test_immediate_repeat_open_same_fingerprint_rejected(self) -> None:
+    def test_second_open_same_contract_rejected_while_open_even_with_new_timestamps(self) -> None:
+        """Different evaluation/chain second buckets must not allow a second open for same contract."""
         db = self.Session()
         try:
             now = datetime.now(timezone.utc)
             ev_ts = now.replace(microsecond=111000)
             ch_ts = now.replace(microsecond=222000)
-            ev = _candidate_call_eval(evaluation_timestamp=ev_ts)
-            sym = ev.contract_candidate.option_symbol
-            ch = _fresh_chain(bid=2.0, ask=2.2, sym=sym, snapshot_timestamp=ch_ts)
+            ev1 = _candidate_call_eval(evaluation_timestamp=ev_ts)
+            sym = ev1.contract_candidate.option_symbol
+            ch1 = _fresh_chain(bid=2.0, ask=2.2, sym=sym, snapshot_timestamp=ch_ts)
             self.svc.open_position(
                 db,
-                evaluation=ev,
-                chain=ch,
+                evaluation=ev1,
+                chain=ch1,
                 market_status=_market_ready(),
                 settings=self.settings,
             )
+            ev2 = _candidate_call_eval(evaluation_timestamp=ev_ts + timedelta(seconds=5))
+            ch2 = _fresh_chain(bid=2.0, ask=2.2, sym=sym, snapshot_timestamp=ch_ts + timedelta(seconds=5))
             with self.assertRaises(PaperTradeError) as ctx:
                 self.svc.open_position(
                     db,
-                    evaluation=ev,
-                    chain=ch,
+                    evaluation=ev2,
+                    chain=ch2,
                     market_status=_market_ready(),
                     settings=self.settings,
                 )
@@ -407,7 +424,36 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
         finally:
             db.close()
 
-    def test_different_option_contract_opens_with_same_timestamps(self) -> None:
+    def test_integrity_error_on_double_open_maps_to_duplicate(self) -> None:
+        """If the app check is bypassed, the partial unique index still blocks (race safety)."""
+        db = self.Session()
+        try:
+            now = datetime.now(timezone.utc)
+            ev = _candidate_call_eval(evaluation_timestamp=now)
+            ch = _fresh_chain(sym=ev.contract_candidate.option_symbol)
+            self.svc.open_position(
+                db,
+                evaluation=ev,
+                chain=ch,
+                market_status=_market_ready(),
+                settings=self.settings,
+            )
+            ev2 = _candidate_call_eval(evaluation_timestamp=now + timedelta(seconds=2))
+            ch2 = _fresh_chain(sym=ev2.contract_candidate.option_symbol)
+            with patch.object(PaperTradeRepository, "has_open_position_for_contract", return_value=False):
+                with self.assertRaises(PaperTradeError) as ctx:
+                    self.svc.open_position(
+                        db,
+                        evaluation=ev2,
+                        chain=ch2,
+                        market_status=_market_ready(),
+                        settings=self.settings,
+                    )
+            self.assertEqual(str(ctx.exception), "duplicate_open_position")
+        finally:
+            db.close()
+
+    def test_different_option_contracts_can_open_concurrently(self) -> None:
         db = self.Session()
         try:
             now = datetime.now(timezone.utc)

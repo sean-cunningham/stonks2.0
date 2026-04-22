@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -66,7 +67,11 @@ def build_entry_evaluation_fingerprint(
     evaluation_timestamp: datetime,
     chain_snapshot_timestamp: datetime,
 ) -> str:
-    """Stable identity for idempotent open: strategy + contract + side + decision + second buckets."""
+    """Audit/replay fingerprint (strategy + contract + side + decision + UTC second buckets).
+
+    Duplicate-open prevention uses ``has_open_position_for_contract`` (any open row for the
+    same strategy/option/side), not this string.
+    """
     return "|".join(
         [
             strategy_id,
@@ -123,11 +128,10 @@ class PaperTradeService:
         )
 
         repo = PaperTradeRepository(db)
-        if repo.has_open_duplicate_fingerprint(
+        if repo.has_open_position_for_contract(
             strategy_id=self.STRATEGY_ID,
             option_symbol=cand.option_symbol,
             side="long",
-            entry_evaluation_fingerprint=fingerprint,
         ):
             raise PaperTradeError("duplicate_open_position")
 
@@ -152,7 +156,10 @@ class PaperTradeService:
             exit_reason=None,
             entry_evaluation_fingerprint=fingerprint,
         )
-        row = repo.create_trade(row)
+        try:
+            row = repo.create_trade(row)
+        except IntegrityError as exc:
+            raise PaperTradeError("duplicate_open_position") from exc
         repo.append_event(
             PaperTradeEvent(
                 paper_trade_id=row.id,
