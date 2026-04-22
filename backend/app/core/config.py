@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     STRATEGY1_PAPER_RUNTIME_ENABLED: bool = False
     STRATEGY1_PAPER_EXECUTE_OFFSET_SECONDS: int = 4
 
+    # Comma-separated browser origins allowed for CORS (local Vite dev server, etc.).
+    CORS_ALLOW_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173"
+
     model_config = SettingsConfigDict(
         env_file=str(BASE_DIR / ".env"),
         env_file_encoding="utf-8",
