@@ -8,6 +8,8 @@ export function buildStrategy1ViewModel(payload: DashboardResponse): StrategyDas
     asOf: payload.as_of_timestamp,
     runtime: payload.runtime,
     controls: payload.controls,
+    currentSignal: payload.current_signal ?? null,
+    cycleSummary: payload.cycle_summary ?? null,
     metrics: payload.headline_metrics,
     equitySeries: payload.timeseries.equity_or_value,
     openPositions: payload.open_positions,

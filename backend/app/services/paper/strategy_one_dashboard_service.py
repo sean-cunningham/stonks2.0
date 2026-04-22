@@ -13,7 +13,9 @@ from app.schemas.strategy_dashboard import (
     StrategyClosedTradeCard,
     StrategyControlsView,
     StrategyCycleHistoryRow,
+    StrategyCycleSummary,
     StrategyDashboardResponse,
+    StrategyCurrentSignal,
     StrategyIdentity,
     StrategyOpenPositionCard,
     StrategyRuntimeView,
@@ -29,6 +31,16 @@ from app.services.paper.strategy_dashboard_service import (
 )
 from app.services.paper.strategy_one_position_monitor import build_open_positions_monitor
 from app.services.paper.strategy_one_runtime_service import get_strategy_one_runtime_coordinator
+from app.services.paper.strategy_one_evaluation_bundle import build_strategy_one_evaluation_bundle
+
+
+def _extract_auto_open_failure(notes_summary: str | None) -> str | None:
+    if not notes_summary:
+        return None
+    token = "auto_open_failed:"
+    if token not in notes_summary:
+        return None
+    return notes_summary.split(token, 1)[1].split("|", 1)[0].strip() or None
 
 
 def build_strategy_one_dashboard(
@@ -117,6 +129,23 @@ def build_strategy_one_dashboard(
         )
         for r in cycle_rows
     ]
+    result_counts: dict[str, int] = {}
+    blocker_counts: dict[str, int] = {}
+    auto_open_failure_count = 0
+    for r in cycle_rows:
+        result_counts[r.result] = result_counts.get(r.result, 0) + 1
+        blocker = _extract_auto_open_failure(r.notes_summary)
+        if blocker:
+            auto_open_failure_count += 1
+            blocker_counts[blocker] = blocker_counts.get(blocker, 0) + 1
+    primary_recent_blocker = (
+        max(blocker_counts.items(), key=lambda kv: kv[1])[0] if blocker_counts else None
+    )
+
+    eval_now, _, _ = build_strategy_one_evaluation_bundle(context, market, settings)
+    candidate_blocked = (
+        eval_now.decision in ("candidate_call", "candidate_put") and primary_recent_blocker is not None
+    )
 
     metrics = compute_headline_metrics(closed=closed_chrono, unrealized_pnl=unrealized_total, open_count=len(open_rows))
     timeseries = build_mvp_timeseries(
@@ -154,6 +183,18 @@ def build_strategy_one_dashboard(
             last_error=runtime.last_error,
         ),
         controls=StrategyControlsView(),
+        current_signal=StrategyCurrentSignal(
+            current_decision=eval_now.decision,
+            current_reasons=list(eval_now.reasons),
+            current_blockers=list(eval_now.blockers),
+            candidate_blocked=candidate_blocked,
+            candidate_block_reason=primary_recent_blocker if candidate_blocked else None,
+        ),
+        cycle_summary=StrategyCycleSummary(
+            recent_auto_open_failure_count=auto_open_failure_count,
+            primary_recent_blocker=primary_recent_blocker,
+            recent_result_counts=result_counts,
+        ),
         headline_metrics=metrics,
         open_positions=open_cards,
         recent_closed_trades=closed_cards,
@@ -163,5 +204,9 @@ def build_strategy_one_dashboard(
             "open_monitor_state_counts": state_counts,
             "market_ready": mstatus.market_ready,
             "market_block_reason": mstatus.block_reason,
+            "root_cause_note": (
+                "intraday entry requires 2-5 DTE but chain selection currently uses nearest expiration, "
+                "so same-day/1-day expiries can produce paper_entry_intraday_dte_not_in_band"
+            ),
         },
     )

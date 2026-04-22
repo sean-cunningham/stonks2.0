@@ -32,6 +32,18 @@ export type DashboardResponse = {
     can_toggle_exit: boolean;
     emergency_close_supported: boolean;
   };
+  current_signal?: {
+    current_decision: "candidate_call" | "candidate_put" | "no_trade" | string;
+    current_reasons: string[];
+    current_blockers: string[];
+    candidate_blocked: boolean;
+    candidate_block_reason: string | null;
+  } | null;
+  cycle_summary?: {
+    recent_auto_open_failure_count: number;
+    primary_recent_blocker: string | null;
+    recent_result_counts: Record<string, number>;
+  } | null;
   headline_metrics: {
     realized_pnl: number;
     unrealized_pnl: number;
@@ -94,6 +106,8 @@ export type StrategyDashboardViewModel = {
   asOf: string;
   runtime: RuntimeView;
   controls: DashboardResponse["controls"];
+  currentSignal: NonNullable<DashboardResponse["current_signal"]> | null;
+  cycleSummary: NonNullable<DashboardResponse["cycle_summary"]> | null;
   metrics: DashboardResponse["headline_metrics"];
   equitySeries: DashboardPoint[];
   openPositions: DashboardResponse["open_positions"];

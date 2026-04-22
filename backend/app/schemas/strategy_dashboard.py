@@ -100,11 +100,27 @@ class StrategyTimeseries(BaseModel):
     limitations: list[str] = Field(default_factory=list)
 
 
+class StrategyCurrentSignal(BaseModel):
+    current_decision: str
+    current_reasons: list[str] = Field(default_factory=list)
+    current_blockers: list[str] = Field(default_factory=list)
+    candidate_blocked: bool = False
+    candidate_block_reason: str | None = None
+
+
+class StrategyCycleSummary(BaseModel):
+    recent_auto_open_failure_count: int = 0
+    primary_recent_blocker: str | None = None
+    recent_result_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class StrategyDashboardResponse(BaseModel):
     as_of_timestamp: datetime
     strategy: StrategyIdentity
     runtime: StrategyRuntimeView
     controls: StrategyControlsView
+    current_signal: StrategyCurrentSignal | None = None
+    cycle_summary: StrategyCycleSummary | None = None
     headline_metrics: StrategyHeadlineMetrics
     open_positions: list[StrategyOpenPositionCard] = Field(default_factory=list)
     recent_closed_trades: list[StrategyClosedTradeCard] = Field(default_factory=list)

@@ -8,6 +8,7 @@ import ClosedTradesTable from "./ClosedTradesTable";
 import CycleHistoryTable from "./CycleHistoryTable";
 import LimitationsPanel from "./LimitationsPanel";
 import StrategyDetailsPanel from "./StrategyDetailsPanel";
+import SignalBlockerPanel from "./SignalBlockerPanel";
 
 type Props = {
   vm: StrategyDashboardViewModel;
@@ -41,6 +42,7 @@ export default function StrategyDashboardShell({
         onEntryToggle={onEntryToggle}
         onExitToggle={onExitToggle}
       />
+      <SignalBlockerPanel signal={vm.currentSignal} cycleSummary={vm.cycleSummary} />
 
       <HeadlineMetricsCards metrics={vm.metrics} />
       <EquityChartPanel points={vm.equitySeries} />
