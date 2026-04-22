@@ -34,3 +34,12 @@ class StrategyRuntimeRepository:
         self._db.commit()
         self._db.refresh(row)
         return row
+
+    def list_cycle_logs(self, *, strategy_id: str, limit: int = 50) -> list[StrategyRuntimeCycleLog]:
+        stmt = (
+            select(StrategyRuntimeCycleLog)
+            .where(StrategyRuntimeCycleLog.strategy_id == strategy_id)
+            .order_by(StrategyRuntimeCycleLog.started_at.desc(), StrategyRuntimeCycleLog.id.desc())
+            .limit(limit)
+        )
+        return list(self._db.scalars(stmt).all())

@@ -71,6 +71,15 @@ class PaperTradeRepository:
         )
         return list(self._db.scalars(stmt).all())
 
+    def list_closed_chronological(self, *, strategy_id: str, limit: int = 1000) -> list[PaperTrade]:
+        stmt = (
+            select(PaperTrade)
+            .where(PaperTrade.strategy_id == strategy_id, PaperTrade.status == "closed")
+            .order_by(PaperTrade.exit_time.asc(), PaperTrade.id.asc())
+            .limit(limit)
+        )
+        return list(self._db.scalars(stmt).all())
+
     def list_events_for_trade(self, paper_trade_id: int) -> list[PaperTradeEvent]:
         stmt = (
             select(PaperTradeEvent)

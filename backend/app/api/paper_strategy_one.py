@@ -22,6 +22,7 @@ from app.schemas.strategy_one_position_monitor import (
     StrategyOneOpenPositionsMonitorResponse,
 )
 from app.schemas.strategy import StrategyOneEvaluationResponse
+from app.schemas.strategy_dashboard import StrategyDashboardResponse
 from app.schemas.strategy_one_paper_execution import StrategyOneExecuteOnceResponse
 from app.schemas.strategy_one_runtime import StrategyOneRuntimeStatusResponse
 from app.services.market.context_service import ContextService
@@ -31,6 +32,7 @@ from app.services.paper.paper_valuation import compute_open_position_valuation
 from app.services.paper.strategy_one_exit_evaluator import ExitEvaluationInput, evaluate_strategy_one_open_exit_readonly
 from app.services.paper.strategy_one_evaluation_bundle import build_strategy_one_evaluation_bundle
 from app.services.paper.strategy_one_execute_once import run_emergency_close_open_paper_trade, run_strategy_one_paper_execute_once
+from app.services.paper.strategy_one_dashboard_service import build_strategy_one_dashboard
 from app.services.paper.strategy_one_runtime_service import get_strategy_one_runtime_coordinator
 from app.services.paper.strategy_one_position_monitor import (
     build_open_positions_monitor,
@@ -58,6 +60,17 @@ def execute_strategy_one_paper_once(
     settings = get_settings()
     _require_paper_app_mode(settings)
     return run_strategy_one_paper_execute_once(db, context=context, market=market, settings=settings)
+
+
+@router.get("/dashboard", response_model=StrategyDashboardResponse)
+def get_strategy_one_dashboard(
+    db: Session = Depends(get_db),
+    context: ContextService = Depends(get_context_service),
+    market: MarketStoreService = Depends(get_market_service),
+) -> StrategyDashboardResponse:
+    settings = get_settings()
+    _require_paper_app_mode(settings)
+    return build_strategy_one_dashboard(db, context=context, market=market, settings=settings)
 
 
 @router.get("/runtime/status", response_model=StrategyOneRuntimeStatusResponse)
