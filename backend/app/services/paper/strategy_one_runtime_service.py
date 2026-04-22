@@ -36,6 +36,7 @@ class StrategyOneRuntimeCoordinator:
         return StrategyOneRuntimeStatusResponse(
             strategy_id=PaperTradeService.STRATEGY_ID,
             mode=settings.APP_MODE,
+            scheduler_enabled=settings.STRATEGY1_PAPER_RUNTIME_ENABLED,
             paused=state.paused,
             entry_enabled=state.entry_enabled,
             exit_enabled=state.exit_enabled,

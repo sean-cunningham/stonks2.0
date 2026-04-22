@@ -23,7 +23,7 @@ from app.schemas.strategy_one_position_monitor import (
 )
 from app.schemas.strategy import StrategyOneEvaluationResponse
 from app.schemas.strategy_one_paper_execution import StrategyOneExecuteOnceResponse
-from app.schemas.strategy_one_runtime import StrategyOneRuntimeControlRequest, StrategyOneRuntimeStatusResponse
+from app.schemas.strategy_one_runtime import StrategyOneRuntimeStatusResponse
 from app.services.market.context_service import ContextService
 from app.services.market.market_store import MarketStoreService
 from app.services.paper.paper_trade_service import PaperTradeError, PaperTradeService
@@ -81,18 +81,47 @@ def resume_strategy_one_runtime(db: Session = Depends(get_db)) -> StrategyOneRun
     return get_strategy_one_runtime_coordinator().set_paused(db, settings=settings, paused=False)
 
 
-@router.post("/runtime/controls", response_model=StrategyOneRuntimeStatusResponse)
-def set_strategy_one_runtime_controls(
-    body: StrategyOneRuntimeControlRequest,
-    db: Session = Depends(get_db),
-) -> StrategyOneRuntimeStatusResponse:
+@router.post("/runtime/entry-enable", response_model=StrategyOneRuntimeStatusResponse)
+def enable_strategy_one_runtime_entry(db: Session = Depends(get_db)) -> StrategyOneRuntimeStatusResponse:
     settings = get_settings()
     _require_paper_app_mode(settings)
     return get_strategy_one_runtime_coordinator().set_runtime_flags(
         db,
         settings=settings,
-        entry_enabled=body.entry_enabled,
-        exit_enabled=body.exit_enabled,
+        entry_enabled=True,
+    )
+
+
+@router.post("/runtime/entry-disable", response_model=StrategyOneRuntimeStatusResponse)
+def disable_strategy_one_runtime_entry(db: Session = Depends(get_db)) -> StrategyOneRuntimeStatusResponse:
+    settings = get_settings()
+    _require_paper_app_mode(settings)
+    return get_strategy_one_runtime_coordinator().set_runtime_flags(
+        db,
+        settings=settings,
+        entry_enabled=False,
+    )
+
+
+@router.post("/runtime/exit-enable", response_model=StrategyOneRuntimeStatusResponse)
+def enable_strategy_one_runtime_exit(db: Session = Depends(get_db)) -> StrategyOneRuntimeStatusResponse:
+    settings = get_settings()
+    _require_paper_app_mode(settings)
+    return get_strategy_one_runtime_coordinator().set_runtime_flags(
+        db,
+        settings=settings,
+        exit_enabled=True,
+    )
+
+
+@router.post("/runtime/exit-disable", response_model=StrategyOneRuntimeStatusResponse)
+def disable_strategy_one_runtime_exit(db: Session = Depends(get_db)) -> StrategyOneRuntimeStatusResponse:
+    settings = get_settings()
+    _require_paper_app_mode(settings)
+    return get_strategy_one_runtime_coordinator().set_runtime_flags(
+        db,
+        settings=settings,
+        exit_enabled=False,
     )
 
 

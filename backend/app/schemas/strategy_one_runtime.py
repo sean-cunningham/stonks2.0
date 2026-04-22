@@ -10,6 +10,7 @@ from pydantic import BaseModel
 class StrategyOneRuntimeStatusResponse(BaseModel):
     strategy_id: str
     mode: str
+    scheduler_enabled: bool
     paused: bool
     entry_enabled: bool
     exit_enabled: bool
@@ -20,7 +21,3 @@ class StrategyOneRuntimeStatusResponse(BaseModel):
     last_cycle_result: str | None = None
     last_error: str | None = None
 
-
-class StrategyOneRuntimeControlRequest(BaseModel):
-    entry_enabled: bool | None = None
-    exit_enabled: bool | None = None

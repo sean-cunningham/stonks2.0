@@ -40,18 +40,27 @@ class StrategyOneRuntimeApiTests(unittest.TestCase):
             status_before = client.get("/paper/strategy/spy/strategy-1/runtime/status")
             self.assertEqual(status_before.status_code, 200, status_before.text)
             self.assertFalse(status_before.json()["paused"])
+            self.assertIn("scheduler_enabled", status_before.json())
 
             paused = client.post("/paper/strategy/spy/strategy-1/runtime/pause")
             self.assertEqual(paused.status_code, 200, paused.text)
             self.assertTrue(paused.json()["paused"])
 
-            controls = client.post(
-                "/paper/strategy/spy/strategy-1/runtime/controls",
-                json={"entry_enabled": False, "exit_enabled": True},
-            )
-            self.assertEqual(controls.status_code, 200, controls.text)
-            self.assertFalse(controls.json()["entry_enabled"])
-            self.assertTrue(controls.json()["exit_enabled"])
+            entry_disabled = client.post("/paper/strategy/spy/strategy-1/runtime/entry-disable")
+            self.assertEqual(entry_disabled.status_code, 200, entry_disabled.text)
+            self.assertFalse(entry_disabled.json()["entry_enabled"])
+
+            exit_disabled = client.post("/paper/strategy/spy/strategy-1/runtime/exit-disable")
+            self.assertEqual(exit_disabled.status_code, 200, exit_disabled.text)
+            self.assertFalse(exit_disabled.json()["exit_enabled"])
+
+            entry_enabled = client.post("/paper/strategy/spy/strategy-1/runtime/entry-enable")
+            self.assertEqual(entry_enabled.status_code, 200, entry_enabled.text)
+            self.assertTrue(entry_enabled.json()["entry_enabled"])
+
+            exit_enabled = client.post("/paper/strategy/spy/strategy-1/runtime/exit-enable")
+            self.assertEqual(exit_enabled.status_code, 200, exit_enabled.text)
+            self.assertTrue(exit_enabled.json()["exit_enabled"])
 
             resumed = client.post("/paper/strategy/spy/strategy-1/runtime/resume")
             self.assertEqual(resumed.status_code, 200, resumed.text)

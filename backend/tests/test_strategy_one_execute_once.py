@@ -248,6 +248,55 @@ class ExecuteOnceUnitTests(unittest.TestCase):
         self.assertEqual(out.cycle_action, "no_action")
         self.assertIn("runtime_exit_disabled", out.notes)
 
+    def test_open_position_still_auto_closes_when_entry_disabled(self) -> None:
+        row = MagicMock(spec=PaperTrade)
+        row.id = 7
+        row.strategy_id = PaperTradeService.STRATEGY_ID
+        row.status = "open"
+        repo_inst = MagicMock()
+        repo_inst.list_open.return_value = [row]
+        exit_eval = MagicMock(spec=StrategyOneExitEvaluationResponse)
+        exit_eval.action = "close_now"
+        valuation = PaperOpenPositionValuationResponse(
+            paper_trade_id=7,
+            option_symbol="SPY  X",
+            side="long",
+            quantity=1,
+            entry_time=datetime.now(timezone.utc),
+            entry_price=2.0,
+            quote_is_fresh=True,
+            exit_actionable=True,
+        )
+        closed = MagicMock(spec=PaperTrade)
+        with (
+            patch(
+                "app.services.paper.strategy_one_execute_once.PaperTradeRepository",
+                return_value=repo_inst,
+            ),
+            patch(
+                "app.services.paper.strategy_one_execute_once.compute_open_position_valuation",
+                return_value=valuation,
+            ),
+            patch(
+                "app.services.paper.strategy_one_execute_once.evaluate_strategy_one_open_exit_readonly",
+                return_value=exit_eval,
+            ),
+            patch.object(PaperTradeService, "close_position", return_value=closed),
+            patch(
+                "app.services.paper.strategy_one_execute_once.PaperTradeResponse.model_validate",
+                return_value=_paper_trade_response_closed(7),
+            ),
+        ):
+            out = run_strategy_one_paper_execute_once(
+                self.db,
+                context=self.context,
+                market=self.market,
+                settings=self.settings,
+                entry_enabled=False,
+                exit_enabled=True,
+            )
+        self.assertEqual(out.cycle_action, "closed")
+
     def test_flat_book_skipped_when_runtime_entry_disabled(self) -> None:
         repo_inst = MagicMock()
         repo_inst.list_open.return_value = []
@@ -264,6 +313,37 @@ class ExecuteOnceUnitTests(unittest.TestCase):
             )
         self.assertEqual(out.cycle_action, "no_action")
         self.assertIn("runtime_entry_disabled", out.notes)
+
+    def test_flat_book_still_auto_opens_when_exit_disabled(self) -> None:
+        ev = MagicMock(spec=StrategyOneEvaluationResponse)
+        ev.decision = "candidate_call"
+        opened = MagicMock(spec=PaperTrade)
+        repo_inst = MagicMock()
+        repo_inst.list_open.return_value = []
+        with (
+            patch(
+                "app.services.paper.strategy_one_execute_once.PaperTradeRepository",
+                return_value=repo_inst,
+            ),
+            patch(
+                "app.services.paper.strategy_one_execute_once.build_strategy_one_evaluation_bundle",
+                return_value=(ev, _mkt(), _chain()),
+            ),
+            patch.object(PaperTradeService, "open_position", return_value=opened),
+            patch(
+                "app.services.paper.strategy_one_execute_once.PaperTradeResponse.model_validate",
+                return_value=_paper_trade_response_open(11),
+            ),
+        ):
+            out = run_strategy_one_paper_execute_once(
+                self.db,
+                context=self.context,
+                market=self.market,
+                settings=self.settings,
+                entry_enabled=True,
+                exit_enabled=False,
+            )
+        self.assertEqual(out.cycle_action, "opened")
 
     def test_close_now_auto_closes_when_quote_ok(self) -> None:
         row = MagicMock(spec=PaperTrade)

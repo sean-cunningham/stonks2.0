@@ -89,11 +89,12 @@ class StrategyOneRuntimeServiceTests(unittest.TestCase):
             patch(
                 "app.services.paper.strategy_one_runtime_service.run_strategy_one_paper_execute_once",
                 return_value=cycle,
-            ),
+            ) as exec_once_mock,
         ):
             out = coord.run_tick(self.db, context=self.context, market=self.market, settings=self.settings)
         self.assertEqual(out.last_cycle_result, "opened")
         self.assertIsNone(out.last_error)
+        exec_once_mock.assert_called_once()
 
     def test_tick_error_sets_last_error(self) -> None:
         coord = StrategyOneRuntimeCoordinator()
