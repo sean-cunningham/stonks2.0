@@ -7,7 +7,12 @@ from app.core.database import Base
 
 
 class PaperTrade(Base):
-    """Paper option position (single contract, BTO/STC references; no broker)."""
+    """Paper option position (single contract, BTO/STC references; no broker).
+
+    Startup DDL (SQLite/PostgreSQL) adds a partial unique index on
+    (strategy_id, option_symbol, side) WHERE status = 'open' so only one open row
+    per contract is possible at the DB level; see ``ensure_paper_trade_open_contract_unique_index``.
+    """
 
     __tablename__ = "paper_trades"
 

@@ -390,6 +390,13 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_sqlite_partial_unique_index_exists_on_paper_trades(self) -> None:
+        """Guards against accidental removal of DB-level duplicate-open enforcement in SQLite."""
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("PRAGMA index_list('paper_trades')")).fetchall()
+        names = [r[1] for r in rows]
+        self.assertIn("uq_paper_trades_open_contract", names)
+
     def test_second_open_same_contract_rejected_while_open_even_with_new_timestamps(self) -> None:
         """Different evaluation/chain second buckets must not allow a second open for same contract."""
         db = self.Session()

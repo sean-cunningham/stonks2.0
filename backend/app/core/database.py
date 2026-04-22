@@ -1,6 +1,7 @@
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
@@ -102,29 +103,33 @@ def ensure_paper_trade_schema() -> None:
 
 
 def ensure_paper_trade_open_contract_unique_index() -> None:
-    """SQLite: at most one OPEN row per (strategy_id, option_symbol, side).
+    """At most one OPEN row per (strategy_id, option_symbol, side).
 
-    Non-SQLite URLs skip this DDL; duplicate-open is still enforced in the service layer.
+    Implemented as a partial unique index (rows with status != 'open' are not indexed).
+    Supported: SQLite and PostgreSQL. Other dialects skip DDL; the service layer still
+    rejects duplicates early and maps DB integrity errors when inserts race.
     """
-    if not settings.DATABASE_URL.startswith("sqlite"):
+    dialect = make_url(settings.DATABASE_URL).get_dialect().name
+    if dialect not in ("sqlite", "postgresql"):
         return
+
+    index_sql = text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_trades_open_contract "
+        "ON paper_trades (strategy_id, option_symbol, side) WHERE status = 'open'"
+    )
+
     with engine.begin() as connection:
-        table = connection.execute(
-            text("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'")
-        ).fetchone()
+        if dialect == "sqlite":
+            table = connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'")
+            ).fetchone()
+        else:
+            table = connection.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'paper_trades'"
+                )
+            ).fetchone()
         if not table:
             return
-        idx = connection.execute(
-            text(
-                "SELECT 1 FROM sqlite_master WHERE type='index' "
-                "AND name='uq_paper_trades_open_contract'"
-            )
-        ).fetchone()
-        if idx:
-            return
-        connection.execute(
-            text(
-                "CREATE UNIQUE INDEX uq_paper_trades_open_contract "
-                "ON paper_trades (strategy_id, option_symbol, side) WHERE status = 'open'"
-            )
-        )
+        connection.execute(index_sql)
