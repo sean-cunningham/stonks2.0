@@ -25,12 +25,13 @@ from app.core.database import (
 from app.core.logging import configure_logging
 from app.jobs.context_refresh import run_startup_context_refresh
 from app.jobs.market_refresh import run_startup_market_refresh
+from app.jobs.strategy_one_runtime_scheduler import StrategyOneRuntimeScheduler
 from app.schemas.health import HealthResponse
 from app.schemas.system import ConfigResponse, StrategiesResponse, SystemStatusResponse
 from app.services.broker.dxlink_spy_candle_streamer import get_spy_candle_streamer
 
 # Import models so SQLAlchemy metadata includes all tables on startup.
-from app.models import bars, journal, market, strategy, trade  # noqa: F401 — trade registers PaperTradeEvent
+from app.models import bars, journal, market, strategy, strategy_runtime, trade  # noqa: F401
 
 settings = get_settings()
 configure_logging(settings.LOG_LEVEL)
@@ -56,8 +57,11 @@ async def lifespan(app: FastAPI):
     streamer.hydrate_from_persisted_db()
     streamer.start()
     run_startup_context_refresh(s)
+    runtime_scheduler = StrategyOneRuntimeScheduler(s)
+    runtime_scheduler.start()
     logger.info("Strategy 1 evaluation and narrow paper-trade persistence are available; live order routing is not implemented.")
     yield
+    runtime_scheduler.stop()
     streamer.stop()
 
 

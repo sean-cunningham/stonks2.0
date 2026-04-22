@@ -41,6 +41,8 @@ class Settings(BaseSettings):
 
     # Paper Strategy 1 — small-account profile for entry-time sizing (not broker equity).
     PAPER_STRATEGY1_ACCOUNT_EQUITY_USD: float = 5000.0
+    STRATEGY1_PAPER_RUNTIME_ENABLED: bool = False
+    STRATEGY1_PAPER_EXECUTE_OFFSET_SECONDS: int = 4
 
     model_config = SettingsConfigDict(
         env_file=str(BASE_DIR / ".env"),

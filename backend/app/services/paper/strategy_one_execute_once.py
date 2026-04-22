@@ -39,6 +39,8 @@ def run_strategy_one_paper_execute_once(
     context: ContextService,
     market: MarketStoreService,
     settings: Settings,
+    entry_enabled: bool = True,
+    exit_enabled: bool = True,
 ) -> StrategyOneExecuteOnceResponse:
     """One cycle: close on exit-eval ``close_now`` if open and quote acceptable; else open on candidate if flat."""
     clock = datetime.now(timezone.utc)
@@ -49,6 +51,14 @@ def run_strategy_one_paper_execute_once(
     svc = PaperTradeService()
 
     if had_open:
+        if not exit_enabled:
+            notes.append("runtime_exit_disabled")
+            return StrategyOneExecuteOnceResponse(
+                cycle_action="no_action",
+                had_open_position_at_start=True,
+                notes=notes,
+                evaluation_timestamp=clock,
+            )
         if len(opens) > 1:
             notes.append("multiple_open_positions_unexpected_using_first_row_only")
         row = opens[0]
@@ -116,6 +126,14 @@ def run_strategy_one_paper_execute_once(
         )
 
     # Flat book: attempt entry from current evaluation bundle.
+    if not entry_enabled:
+        notes.append("runtime_entry_disabled")
+        return StrategyOneExecuteOnceResponse(
+            cycle_action="no_action",
+            had_open_position_at_start=False,
+            notes=notes,
+            evaluation_timestamp=clock,
+        )
     evaluation, mstatus, chain = build_strategy_one_evaluation_bundle(context, market, settings)
     if evaluation.decision == "no_trade":
         notes.append("entry_evaluator_no_trade_candidate")

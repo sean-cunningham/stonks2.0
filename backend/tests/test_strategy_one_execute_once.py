@@ -227,6 +227,44 @@ class ExecuteOnceUnitTests(unittest.TestCase):
         self.assertEqual(out.cycle_action, "no_action")
         self.assertTrue(any("duplicate" in n for n in out.notes))
 
+    def test_open_position_skipped_when_runtime_exit_disabled(self) -> None:
+        row = MagicMock(spec=PaperTrade)
+        row.id = 7
+        row.strategy_id = PaperTradeService.STRATEGY_ID
+        row.status = "open"
+        repo_inst = MagicMock()
+        repo_inst.list_open.return_value = [row]
+        with patch(
+            "app.services.paper.strategy_one_execute_once.PaperTradeRepository",
+            return_value=repo_inst,
+        ):
+            out = run_strategy_one_paper_execute_once(
+                self.db,
+                context=self.context,
+                market=self.market,
+                settings=self.settings,
+                exit_enabled=False,
+            )
+        self.assertEqual(out.cycle_action, "no_action")
+        self.assertIn("runtime_exit_disabled", out.notes)
+
+    def test_flat_book_skipped_when_runtime_entry_disabled(self) -> None:
+        repo_inst = MagicMock()
+        repo_inst.list_open.return_value = []
+        with patch(
+            "app.services.paper.strategy_one_execute_once.PaperTradeRepository",
+            return_value=repo_inst,
+        ):
+            out = run_strategy_one_paper_execute_once(
+                self.db,
+                context=self.context,
+                market=self.market,
+                settings=self.settings,
+                entry_enabled=False,
+            )
+        self.assertEqual(out.cycle_action, "no_action")
+        self.assertIn("runtime_entry_disabled", out.notes)
+
     def test_close_now_auto_closes_when_quote_ok(self) -> None:
         row = MagicMock(spec=PaperTrade)
         row.id = 7
