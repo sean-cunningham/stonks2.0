@@ -143,9 +143,7 @@ def build_strategy_one_dashboard(
     )
 
     eval_now, _, _ = build_strategy_one_evaluation_bundle(context, market, settings)
-    candidate_blocked = (
-        eval_now.decision in ("candidate_call", "candidate_put") and primary_recent_blocker is not None
-    )
+    candidate_blocked = eval_now.decision in ("candidate_call", "candidate_put") and auto_open_failure_count > 0
 
     metrics = compute_headline_metrics(closed=closed_chrono, unrealized_pnl=unrealized_total, open_count=len(open_rows))
     timeseries = build_mvp_timeseries(
@@ -205,8 +203,11 @@ def build_strategy_one_dashboard(
             "market_ready": mstatus.market_ready,
             "market_block_reason": mstatus.block_reason,
             "root_cause_note": (
-                "intraday entry requires 2-5 DTE but chain selection currently uses nearest expiration, "
-                "so same-day/1-day expiries can produce paper_entry_intraday_dte_not_in_band"
+                "Strategy 1 intraday entry uses the same 2-5 calendar DTE band (US/Eastern) in the evaluator "
+                "and at paper entry. The option chain snapshot includes a bounded forward multi-expiry pool "
+                "(selected_expiration is unset so rows are not collapsed to one expiry). If "
+                "paper_entry_intraday_dte_not_in_band still appears, the contract in the evaluation snapshot "
+                "likely predates this alignment or no 2-5 DTE rows were quoted in the current pool."
             ),
         },
     )

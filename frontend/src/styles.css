@@ -31,6 +31,134 @@ body {
   padding: 12px;
 }
 
+.panel-signal-priority {
+  border-color: #3b82f6aa;
+  box-shadow: 0 0 0 1px #1d4ed822 inset;
+}
+
+.signal-top-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-bottom: 10px;
+}
+
+.signal-meta {
+  font-size: 13px;
+  color: #cbd5e1;
+}
+
+.signal-highlight {
+  background: #422006;
+  border: 1px solid #b45309;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 14px;
+}
+
+.signal-subtle {
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+
+.signal-body {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #cbd5e1;
+  line-height: 1.45;
+}
+
+.decision-badge {
+  display: inline-block;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.decision-candidate-call {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+.decision-candidate-put {
+  background: #831843;
+  color: #fbcfe8;
+}
+
+.decision-no-trade {
+  background: #334155;
+  color: #e2e8f0;
+}
+
+.decision-default {
+  background: #1e293b;
+  color: #cbd5e1;
+}
+
+.details-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.detail-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 10px;
+}
+
+.detail-card-wide {
+  grid-column: 1 / -1;
+}
+
+.detail-card-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  margin-bottom: 6px;
+}
+
+.detail-card-value {
+  font-size: 14px;
+  color: #e5e7eb;
+}
+
+.detail-prose {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #cbd5e1;
+}
+
+.detail-chip {
+  display: inline-block;
+  margin: 0 8px 6px 0;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: #1e293b;
+  font-size: 13px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+}
+
+.notes-cell {
+  max-width: 360px;
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.why-line + .why-line {
+  margin-top: 8px;
+}
+
 .banner {
   background: #1f2937;
   border: 1px solid #334155;

@@ -34,6 +34,8 @@ export default function StrategyDashboardShell({
         <div className="muted">Last updated: {new Date(vm.asOf).toLocaleString()}</div>
       </header>
 
+      <SignalBlockerPanel signal={vm.currentSignal} cycleSummary={vm.cycleSummary} />
+
       <RuntimeHealthBanner runtime={vm.runtime} limitations={vm.limitations} />
       <RuntimeControlsPanel
         runtime={vm.runtime}
@@ -42,7 +44,6 @@ export default function StrategyDashboardShell({
         onEntryToggle={onEntryToggle}
         onExitToggle={onExitToggle}
       />
-      <SignalBlockerPanel signal={vm.currentSignal} cycleSummary={vm.cycleSummary} />
 
       <HeadlineMetricsCards metrics={vm.metrics} />
       <EquityChartPanel points={vm.equitySeries} />
