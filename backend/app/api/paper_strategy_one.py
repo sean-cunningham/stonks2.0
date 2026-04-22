@@ -21,48 +21,65 @@ from app.schemas.strategy_one_position_monitor import (
     StrategyOneOpenPositionMonitorResponse,
     StrategyOneOpenPositionsMonitorResponse,
 )
-from app.schemas.strategy import StrategyOneEvaluationResponse, StrategyOneMarketEvaluationTrace
+from app.schemas.strategy import StrategyOneEvaluationResponse
+from app.schemas.strategy_one_paper_execution import StrategyOneExecuteOnceResponse
 from app.services.market.context_service import ContextService
 from app.services.market.market_store import MarketStoreService
 from app.services.paper.paper_trade_service import PaperTradeError, PaperTradeService
 from app.services.paper.paper_valuation import compute_open_position_valuation
 from app.services.paper.strategy_one_exit_evaluator import ExitEvaluationInput, evaluate_strategy_one_open_exit_readonly
+from app.services.paper.strategy_one_evaluation_bundle import build_strategy_one_evaluation_bundle
+from app.services.paper.strategy_one_execute_once import run_emergency_close_open_paper_trade, run_strategy_one_paper_execute_once
 from app.services.paper.strategy_one_position_monitor import (
     build_open_positions_monitor,
     build_single_open_position_monitor,
 )
-from app.services.strategy.strategy_one_spy import StrategyOneEvalInput, evaluate_strategy_one_spy
 
 router = APIRouter(prefix="/paper/strategy/spy/strategy-1", tags=["paper"])
 
 
-def _build_evaluation_bundle(
-    context: ContextService,
-    market: MarketStoreService,
-    settings: Settings,
-) -> tuple[StrategyOneEvaluationResponse, MarketStatusResponse, ChainLatestResponse]:
-    """One resolve + one chain read + evaluation (matches GET /strategy/spy/strategy-1/evaluation)."""
-    st = context.get_status()
-    summary = context.get_summary()
-    resolution = market.resolve_spy_market_for_evaluation()
-    mstatus = resolution.final_status
-    chain = market.get_latest_chain()
-    inp = StrategyOneEvalInput.from_api(
-        status=st,
-        summary=summary,
-        market=mstatus,
-        chain=chain,
-        quote_freshness_threshold_seconds=settings.MARKET_QUOTE_MAX_AGE_SECONDS,
-    )
-    trace = StrategyOneMarketEvaluationTrace(
-        market_status_source=resolution.market_status_source,
-        auto_refresh_attempted=resolution.auto_refresh_attempted,
-        auto_refresh_trigger_reason=resolution.auto_refresh_trigger_reason,
-        post_refresh_market_ready=resolution.post_refresh_market_ready,
-        post_refresh_block_reason=resolution.post_refresh_block_reason,
-    )
-    evaluation = evaluate_strategy_one_spy(inp).model_copy(update={"market_evaluation_trace": trace})
-    return evaluation, mstatus, chain
+def _require_paper_app_mode(settings: Settings) -> None:
+    if settings.APP_MODE != "paper":
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="strategy_1_paper_automation_requires_app_mode_paper",
+        )
+
+
+@router.post("/execute-once", response_model=StrategyOneExecuteOnceResponse)
+def execute_strategy_one_paper_once(
+    db: Session = Depends(get_db),
+    context: ContextService = Depends(get_context_service),
+    market: MarketStoreService = Depends(get_market_service),
+) -> StrategyOneExecuteOnceResponse:
+    """Run one automatic Strategy 1 paper cycle (auto-open or auto-close only; no live routing)."""
+    settings = get_settings()
+    _require_paper_app_mode(settings)
+    return run_strategy_one_paper_execute_once(db, context=context, market=market, settings=settings)
+
+
+@router.post("/positions/{paper_trade_id}/close-now", response_model=PaperTradeResponse)
+def emergency_close_paper_position_now(
+    paper_trade_id: int,
+    db: Session = Depends(get_db),
+    market: MarketStoreService = Depends(get_market_service),
+) -> PaperTradeResponse:
+    """Emergency manual override: close one open paper trade with conservative exit rules."""
+    settings = get_settings()
+    _require_paper_app_mode(settings)
+    try:
+        row = run_emergency_close_open_paper_trade(
+            db,
+            paper_trade_id=paper_trade_id,
+            market=market,
+            settings=settings,
+        )
+    except PaperTradeError as exc:
+        code = str(exc)
+        if code == "paper_trade_not_open_for_emergency_close":
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=code) from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=code) from exc
+    return PaperTradeResponse.model_validate(row)
 
 
 @router.post("/positions", response_model=PaperTradeResponse, status_code=status.HTTP_201_CREATED)
@@ -73,7 +90,7 @@ def open_paper_position_from_evaluation(
 ) -> PaperTradeResponse:
     """Open one paper long position from the current Strategy 1 evaluation (server-side snapshot)."""
     settings = get_settings()
-    evaluation, mstatus, chain = _build_evaluation_bundle(context, market, settings)
+    evaluation, mstatus, chain = build_strategy_one_evaluation_bundle(context, market, settings)
     svc = PaperTradeService()
     try:
         row = svc.open_position(
