@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from app.schemas.context import ContextStatusResponse, ContextSummaryResponse
 from app.schemas.market import ChainLatestResponse, MarketStatusResponse, NearAtmContract
 from app.schemas.strategy import StrategyOneContextSnapshot, StrategyOneEvaluationResponse
+from app.services.paper.strategy_one_entry_policies import (
+    INTRADAY_DTE_MAX,
+    INTRADAY_DTE_MIN,
+    calendar_dte_to_expiration_us_eastern,
+)
 
 # First-pass deterministic contract filters (tune via config later if needed).
 _MAX_SPREAD_PERCENT = 35.0
@@ -142,6 +147,29 @@ def _contract_passes_quality(c: NearAtmContract, *, selected_expiration: str | N
     return True
 
 
+def _contract_calendar_dte(c: NearAtmContract, *, clock_utc: datetime) -> int | None:
+    if not c.expiration_date:
+        return None
+    try:
+        return calendar_dte_to_expiration_us_eastern(expiration_date_str=c.expiration_date, as_of_utc=clock_utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _contract_passes_quality_and_intraday_entry_dte(
+    c: NearAtmContract,
+    *,
+    selected_expiration: str | None,
+    clock_utc: datetime,
+) -> bool:
+    if not _contract_passes_quality(c, selected_expiration=selected_expiration):
+        return False
+    dte = _contract_calendar_dte(c, clock_utc=clock_utc)
+    if dte is None:
+        return False
+    return INTRADAY_DTE_MIN <= dte <= INTRADAY_DTE_MAX
+
+
 def _or_mid(orh: float, orl: float) -> float:
     return 0.5 * (orh + orl)
 
@@ -222,12 +250,14 @@ def _pick_contract_nearest_strike(
     want_call: bool,
     reference: float,
     selected_expiration: str | None,
+    clock_utc: datetime,
 ) -> NearAtmContract | None:
-    """Nearest strike to reference among quality-passing contracts; delta is never used."""
+    """Nearest strike to reference among quality-passing contracts in intraday DTE band; delta is never used."""
     filtered = [
         c
         for c in contracts
-        if (c.is_call if want_call else c.is_put) and _contract_passes_quality(c, selected_expiration=selected_expiration)
+        if (c.is_call if want_call else c.is_put)
+        and _contract_passes_quality_and_intraday_entry_dte(c, selected_expiration=selected_expiration, clock_utc=clock_utc)
     ]
     if not filtered:
         return None
@@ -380,9 +410,10 @@ def evaluate_strategy_one_spy(
             want_call=True,
             reference=float(ref),
             selected_expiration=inp.chain_selected_expiration,
+            clock_utc=ts,
         )
         if c is None:
-            blockers.append("no_acceptable_option_contract")
+            blockers.append("no_acceptable_option_contract_in_intraday_dte_band_2_5")
             return StrategyOneEvaluationResponse(
                 decision="no_trade",
                 blockers=blockers,
@@ -400,7 +431,7 @@ def evaluate_strategy_one_spy(
                 tag or "bullish_structure",
                 "atr_positive",
                 "call_contract_passed_quality_filters",
-                "contract_selected_nearest_strike_to_underlying_reference_no_delta_preference",
+                "contract_selected_nearest_strike_intraday_dte_band_2_5",
             ]
         )
         return StrategyOneEvaluationResponse(
@@ -418,9 +449,10 @@ def evaluate_strategy_one_spy(
             want_call=False,
             reference=float(ref),
             selected_expiration=inp.chain_selected_expiration,
+            clock_utc=ts,
         )
         if c is None:
-            blockers.append("no_acceptable_option_contract")
+            blockers.append("no_acceptable_option_contract_in_intraday_dte_band_2_5")
             return StrategyOneEvaluationResponse(
                 decision="no_trade",
                 blockers=blockers,
@@ -438,7 +470,7 @@ def evaluate_strategy_one_spy(
                 tag or "bearish_structure",
                 "atr_positive",
                 "put_contract_passed_quality_filters",
-                "contract_selected_nearest_strike_to_underlying_reference_no_delta_preference",
+                "contract_selected_nearest_strike_intraday_dte_band_2_5",
             ]
         )
         return StrategyOneEvaluationResponse(

@@ -13,8 +13,17 @@ import websockets
 
 from app.core.config import Settings
 from app.services.broker.tastytrade_auth import BrokerAuthError, TastytradeAuthService
+from app.services.paper.strategy_one_entry_policies import (
+    SWING_DTE_MAX,
+    calendar_dte_to_expiration_us_eastern,
+)
 
 logger = logging.getLogger(__name__)
+
+# Near-ATM quote pool: calendar DTE (US/Eastern vs expiration date) for Strategy 1 entry bands
+# and future swing coverage. Evaluator still restricts *selection* to intraday 2–5 DTE.
+_CHAIN_ENTRY_POOL_DTE_MIN = 0
+_CHAIN_ENTRY_POOL_DTE_MAX = SWING_DTE_MAX
 
 
 class MarketDataError(Exception):
@@ -169,11 +178,13 @@ class TastytradeMarketDataService:
             raise MarketDataError("chain_unavailable")
 
         expiration_dates_found = self._extract_expiration_dates_from_items(contracts)
-        selected_exp = self._select_expiration(expiration_dates_found)
-        if not selected_exp:
-            raise MarketDataError("chain_unavailable")
-
-        near_contracts = self._build_near_atm_contracts(contracts, underlying_price, selected_exp)
+        as_of_utc = datetime.now(timezone.utc)
+        near_contracts = self._build_near_atm_contracts_entry_pool(
+            contracts,
+            underlying_price,
+            expiration_dates_found,
+            as_of_utc=as_of_utc,
+        )
         if not near_contracts:
             raise MarketDataError("chain_unavailable")
 
@@ -193,7 +204,8 @@ class TastytradeMarketDataService:
             underlying_symbol=symbol,
             snapshot_timestamp=snapshot_ts,
             expiration_dates_found=expiration_dates_found,
-            selected_expiration=selected_exp,
+            # Multi-expiry near-ATM pool; do not use a single expiry for downstream filtering.
+            selected_expiration=None,
             underlying_reference_price=underlying_price,
             total_contracts_seen=len(contracts),
             near_atm_contracts=near_atm,
@@ -201,14 +213,26 @@ class TastytradeMarketDataService:
             source_status=source_status,
         )
 
-    def _build_near_atm_contracts(
+    def _build_near_atm_contracts_entry_pool(
         self,
         contracts: list[dict[str, Any]],
         underlying_price: float | None,
-        selected_expiration: str,
+        expiration_dates_found: list[str],
+        *,
+        as_of_utc: datetime,
     ) -> list[OptionContractNormalized]:
+        """Collect near-ATM rows across expirations in a bounded DTE window (calendar US/Eastern)."""
         if underlying_price is None:
             return []
+        eligible: set[str] = set()
+        for exp in expiration_dates_found:
+            try:
+                dte = calendar_dte_to_expiration_us_eastern(expiration_date_str=exp, as_of_utc=as_of_utc)
+            except (TypeError, ValueError):
+                continue
+            if _CHAIN_ENTRY_POOL_DTE_MIN <= dte <= _CHAIN_ENTRY_POOL_DTE_MAX:
+                eligible.add(exp)
+
         parsed: list[tuple[float, OptionContractNormalized]] = []
         for contract in contracts:
             if not isinstance(contract, dict):
@@ -219,7 +243,8 @@ class TastytradeMarketDataService:
                 or contract.get("expires-at")
                 or contract.get("expiration")
             )
-            if str(expiration) != selected_expiration:
+            exp_s = str(expiration) if expiration else ""
+            if exp_s not in eligible:
                 continue
             strike = self._to_float(contract.get("strike-price") or contract.get("strike"))
             if strike is None:
@@ -234,7 +259,7 @@ class TastytradeMarketDataService:
                 streamer_symbol=streamer_symbol,
                 strike=strike,
                 option_type="call" if option_type.startswith("c") else "put" if option_type.startswith("p") else "unknown",
-                expiration_date=str(expiration),
+                expiration_date=exp_s,
                 bid=None,
                 ask=None,
                 mid=None,
@@ -244,13 +269,13 @@ class TastytradeMarketDataService:
                 is_call=option_type.startswith("c"),
                 is_put=option_type.startswith("p"),
             )
-            distance = abs(strike - underlying_price)
+            distance = abs(strike - float(underlying_price))
             parsed.append((distance, normalized))
 
         parsed.sort(key=lambda item: item[0])
-        near = [item[1] for item in parsed[:20]]
-        calls = [c for c in near if c.is_call][:5]
-        puts = [c for c in near if c.is_put][:5]
+        near = [item[1] for item in parsed[:36]]
+        calls = [c for c in near if c.is_call][:9]
+        puts = [c for c in near if c.is_put][:9]
         return calls + puts
 
     def _merge_option_quotes(
@@ -445,9 +470,19 @@ class TastytradeMarketDataService:
             if not isinstance(expirations, list):
                 continue
             for exp in expirations:
+                if not isinstance(exp, dict):
+                    continue
+                exp_date = exp.get("expiration-date") or exp.get("expiration_date")
                 strikes = exp.get("strikes") if isinstance(exp, dict) else None
                 if isinstance(strikes, list):
-                    contracts.extend([strike for strike in strikes if isinstance(strike, dict)])
+                    for strike in strikes:
+                        if not isinstance(strike, dict):
+                            continue
+                        merged = dict(strike)
+                        if exp_date:
+                            merged.setdefault("expiration-date", str(exp_date))
+                            merged.setdefault("expiration_date", str(exp_date))
+                        contracts.append(merged)
         return contracts
 
     @staticmethod
