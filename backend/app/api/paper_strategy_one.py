@@ -17,12 +17,20 @@ from app.schemas.paper_trade import (
     PaperTradeResponse,
 )
 from app.schemas.strategy_one_exit_evaluation import StrategyOneExitEvaluationResponse
+from app.schemas.strategy_one_position_monitor import (
+    StrategyOneOpenPositionMonitorResponse,
+    StrategyOneOpenPositionsMonitorResponse,
+)
 from app.schemas.strategy import StrategyOneEvaluationResponse, StrategyOneMarketEvaluationTrace
 from app.services.market.context_service import ContextService
 from app.services.market.market_store import MarketStoreService
 from app.services.paper.paper_trade_service import PaperTradeError, PaperTradeService
 from app.services.paper.paper_valuation import compute_open_position_valuation
 from app.services.paper.strategy_one_exit_evaluator import ExitEvaluationInput, evaluate_strategy_one_open_exit_readonly
+from app.services.paper.strategy_one_position_monitor import (
+    build_open_positions_monitor,
+    build_single_open_position_monitor,
+)
 from app.services.strategy.strategy_one_spy import StrategyOneEvalInput, evaluate_strategy_one_spy
 
 router = APIRouter(prefix="/paper/strategy/spy/strategy-1", tags=["paper"])
@@ -125,6 +133,59 @@ def list_open_paper_position_valuations(
     repo = PaperTradeRepository(db)
     rows = repo.list_open(strategy_id=PaperTradeService.STRATEGY_ID)
     return [compute_open_position_valuation(r, chain, settings) for r in rows]
+
+
+@router.get("/positions/open/monitor", response_model=StrategyOneOpenPositionsMonitorResponse)
+def list_open_positions_monitor(
+    db: Session = Depends(get_db),
+    context: ContextService = Depends(get_context_service),
+    market: MarketStoreService = Depends(get_market_service),
+) -> StrategyOneOpenPositionsMonitorResponse:
+    """Unified read-only monitor for all open Strategy 1 paper positions (one chain snapshot)."""
+    settings = get_settings()
+    st = context.get_status()
+    summary = context.get_summary()
+    resolution = market.resolve_spy_market_for_evaluation()
+    mstatus = resolution.final_status
+    chain = market.get_latest_chain()
+    repo = PaperTradeRepository(db)
+    rows = repo.list_open(strategy_id=PaperTradeService.STRATEGY_ID)
+    return build_open_positions_monitor(
+        rows,
+        chain=chain,
+        settings=settings,
+        context_status=st,
+        context_summary=summary,
+        market_status=mstatus,
+    )
+
+
+@router.get("/positions/{paper_trade_id}/monitor", response_model=StrategyOneOpenPositionMonitorResponse)
+def get_open_position_monitor(
+    paper_trade_id: int,
+    db: Session = Depends(get_db),
+    context: ContextService = Depends(get_context_service),
+    market: MarketStoreService = Depends(get_market_service),
+) -> StrategyOneOpenPositionMonitorResponse:
+    """Unified read-only monitor for one open Strategy 1 paper position."""
+    settings = get_settings()
+    repo = PaperTradeRepository(db)
+    row = repo.get_trade(paper_trade_id)
+    if row is None or row.strategy_id != PaperTradeService.STRATEGY_ID or row.status != "open":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="open_paper_trade_not_found")
+    st = context.get_status()
+    summary = context.get_summary()
+    resolution = market.resolve_spy_market_for_evaluation()
+    mstatus = resolution.final_status
+    chain = market.get_latest_chain()
+    return build_single_open_position_monitor(
+        row,
+        chain=chain,
+        settings=settings,
+        context_status=st,
+        context_summary=summary,
+        market_status=mstatus,
+    )
 
 
 @router.get("/positions/{paper_trade_id}/exit-evaluation", response_model=StrategyOneExitEvaluationResponse)
