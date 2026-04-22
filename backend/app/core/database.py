@@ -1,6 +1,7 @@
-﻿from collections.abc import Generator
+from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import get_settings
@@ -33,3 +34,128 @@ def check_database_connectivity() -> bool:
         return True
     except Exception:
         return False
+
+
+def delete_legacy_spy_intraday_bars() -> int:
+    """
+    Remove SPY 1m/5m rows that are not from the DXLink candle pipeline.
+
+    Prevents Yahoo or REST snapshot bars from affecting context readiness.
+    """
+    prefix = "tastytrade_dxlink_candle"
+    with engine.begin() as connection:
+        result = connection.execute(
+            text(
+                "DELETE FROM intraday_bars WHERE symbol = 'SPY' "
+                "AND timeframe IN ('1m', '5m') "
+                "AND (source_status IS NULL OR source_status NOT LIKE :pfx)"
+            ),
+            {"pfx": f"{prefix}%"},
+        )
+        return int(result.rowcount or 0)
+
+
+def ensure_market_snapshot_schema() -> None:
+    """Backfill additive columns for local SQLite scaffold updates."""
+    if not settings.DATABASE_URL.startswith("sqlite"):
+        return
+
+    expected_columns: dict[str, str] = {
+        "chain_snapshot_time": "DATETIME",
+        "underlying_last": "FLOAT",
+        "chain_contract_count": "INTEGER",
+        "expiration_dates_json": "JSON",
+        "nearest_expiration": "VARCHAR(16)",
+        "atm_reference_price": "FLOAT",
+        "near_atm_contracts_json": "JSON",
+    }
+    with engine.begin() as connection:
+        existing_rows = connection.execute(text("PRAGMA table_info(market_snapshots)")).fetchall()
+        existing = {row[1] for row in existing_rows}
+        for column, ddl_type in expected_columns.items():
+            if column not in existing:
+                connection.execute(text(f"ALTER TABLE market_snapshots ADD COLUMN {column} {ddl_type}"))
+
+
+def ensure_paper_trade_schema() -> None:
+    """Additive columns for paper_trades (existing local DBs / Postgres)."""
+    dialect = make_url(settings.DATABASE_URL).get_dialect().name
+    if dialect == "sqlite":
+        with engine.begin() as connection:
+            table = connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'")
+            ).fetchone()
+            if not table:
+                return
+            rows = connection.execute(text("PRAGMA table_info(paper_trades)")).fetchall()
+            existing = {row[1] for row in rows}
+            expected_columns: dict[str, str] = {
+                "entry_decision": "VARCHAR(16) DEFAULT ''",
+                "evaluation_snapshot_json": "JSON",
+                "entry_reference_basis": "VARCHAR(32) DEFAULT 'option_ask'",
+                "exit_reference_basis": "VARCHAR(32)",
+                "exit_reason": "TEXT",
+                "entry_evaluation_fingerprint": "VARCHAR(256) DEFAULT ''",
+                "exit_policy": "JSON",
+                "sizing_policy": "JSON",
+            }
+            for column, ddl_type in expected_columns.items():
+                if column not in existing:
+                    connection.execute(text(f"ALTER TABLE paper_trades ADD COLUMN {column} {ddl_type}"))
+    elif dialect == "postgresql":
+        with engine.begin() as connection:
+            table = connection.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'paper_trades'"
+                )
+            ).fetchone()
+            if not table:
+                return
+            rows = connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'paper_trades'"
+                )
+            ).fetchall()
+            existing = {row[0] for row in rows}
+            expected_columns: dict[str, str] = {
+                "exit_policy": "JSONB",
+                "sizing_policy": "JSONB",
+            }
+            for column, ddl_type in expected_columns.items():
+                if column not in existing:
+                    connection.execute(text(f"ALTER TABLE paper_trades ADD COLUMN {column} {ddl_type}"))
+
+
+def ensure_paper_trade_open_contract_unique_index() -> None:
+    """At most one OPEN row per (strategy_id, option_symbol, side).
+
+    Implemented as a partial unique index (rows with status != 'open' are not indexed).
+    Supported: SQLite and PostgreSQL. Other dialects skip DDL; the service layer still
+    rejects duplicates early and maps DB integrity errors when inserts race.
+    """
+    dialect = make_url(settings.DATABASE_URL).get_dialect().name
+    if dialect not in ("sqlite", "postgresql"):
+        return
+
+    index_sql = text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_trades_open_contract "
+        "ON paper_trades (strategy_id, option_symbol, side) WHERE status = 'open'"
+    )
+
+    with engine.begin() as connection:
+        if dialect == "sqlite":
+            table = connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'")
+            ).fetchone()
+        else:
+            table = connection.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'paper_trades'"
+                )
+            ).fetchone()
+        if not table:
+            return
+        connection.execute(index_sql)

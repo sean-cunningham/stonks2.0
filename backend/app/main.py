@@ -1,37 +1,76 @@
-﻿import logging
+import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from sqlalchemy.orm import Session
 
+from app.api.context import router as context_router
+from app.api.debug_dxlink import router as debug_dxlink_router
 from app.api.health import get_health
+from app.api.market import router as market_router
+from app.api.paper_strategy_one import router as paper_strategy_one_router
+from app.api.strategy_one import router as strategy_one_router
 from app.api.system import get_config, get_status, get_strategies
 from app.core.config import get_settings
-from app.core.database import Base, check_database_connectivity, engine, get_db
+from app.core.database import (
+    Base,
+    check_database_connectivity,
+    delete_legacy_spy_intraday_bars,
+    engine,
+    ensure_market_snapshot_schema,
+    ensure_paper_trade_schema,
+    ensure_paper_trade_open_contract_unique_index,
+    get_db,
+)
 from app.core.logging import configure_logging
+from app.jobs.context_refresh import run_startup_context_refresh
+from app.jobs.market_refresh import run_startup_market_refresh
+from app.jobs.strategy_one_runtime_scheduler import StrategyOneRuntimeScheduler
 from app.schemas.health import HealthResponse
 from app.schemas.system import ConfigResponse, StrategiesResponse, SystemStatusResponse
+from app.services.broker.dxlink_spy_candle_streamer import get_spy_candle_streamer
 
 # Import models so SQLAlchemy metadata includes all tables on startup.
-from app.models import journal, market, strategy, trade  # noqa: F401
+from app.models import bars, journal, market, strategy, strategy_runtime, trade  # noqa: F401
 
 settings = get_settings()
 configure_logging(settings.LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title=settings.APP_NAME)
 
-
-@app.on_event("startup")
-def on_startup() -> None:
-    """Initialize database and report startup status."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Database init, legacy bar cleanup, market snapshot refresh, DXLink streamer."""
+    s = get_settings()
     Base.metadata.create_all(bind=engine)
+    ensure_market_snapshot_schema()
+    ensure_paper_trade_schema()
+    ensure_paper_trade_open_contract_unique_index()
+    removed = delete_legacy_spy_intraday_bars()
+    logger.info("Legacy SPY intraday bar cleanup removed_rows=%s", removed)
     db_ok = check_database_connectivity()
-    logger.info("Starting %s", settings.APP_NAME)
-    logger.info("Environment=%s mode=%s", settings.APP_ENV, settings.APP_MODE)
+    logger.info("Starting %s", s.APP_NAME)
+    logger.info("Environment=%s mode=%s", s.APP_ENV, s.APP_MODE)
     logger.info("Database connectivity=%s", db_ok)
-    logger.info(
-        "Broker/data/strategy execution layers are not implemented yet; system is not ready for trading."
-    )
+    run_startup_market_refresh(s)
+    streamer = get_spy_candle_streamer(s)
+    streamer.hydrate_from_persisted_db()
+    streamer.start()
+    run_startup_context_refresh(s)
+    runtime_scheduler = StrategyOneRuntimeScheduler(s)
+    runtime_scheduler.start()
+    logger.info("Strategy 1 evaluation and narrow paper-trade persistence are available; live order routing is not implemented.")
+    yield
+    runtime_scheduler.stop()
+    streamer.stop()
+
+
+app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
+app.include_router(market_router)
+app.include_router(context_router)
+app.include_router(debug_dxlink_router)
+app.include_router(strategy_one_router)
+app.include_router(paper_strategy_one_router)
 
 
 @app.get("/health", response_model=HealthResponse)

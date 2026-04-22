@@ -1,4 +1,4 @@
-﻿from app.core.config import get_settings
+from app.core.config import get_settings
 from app.core.database import check_database_connectivity
 from app.core.time import utc_now_iso
 from app.schemas.system import ConfigResponse, StrategiesResponse, StrategyMeta, SystemStatusResponse
@@ -38,8 +38,8 @@ def get_status() -> SystemStatusResponse:
         current_utc_time=utc_now_iso(),
         supported_strategies=["strategy_1_spy_continuation"],
         note=(
-            "Broker integration, market data ingestion, strategy evaluation, "
-            "and paper execution are not implemented yet. System is not ready for trading."
+            "Real SPY market data integration is enabled. Strategy evaluation and "
+            "paper execution are not implemented yet."
         ),
     )
 

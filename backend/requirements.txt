@@ -1,4 +1,6 @@
-﻿fastapi
+fastapi
 uvicorn
 pydantic-settings
 sqlalchemy
+httpx
+websockets

@@ -1,0 +1,59 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Logs / runtime artifacts
+*.log
+*.pid
+
+# Local databases / state
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Environment and secrets
+.env
+.env.*
+*.env
+secrets.*
+*.pem
+*.key
+*.crt
+
+# Cursor / local tooling artifacts
+.cursor/
+
+# Project-specific local docs not for git
+backend/ENDPOINT_TEST_COMMANDS.md
