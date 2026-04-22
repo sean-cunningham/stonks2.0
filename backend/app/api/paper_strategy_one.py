@@ -10,11 +10,17 @@ from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.schemas.market import ChainLatestResponse, MarketStatusResponse
-from app.schemas.paper_trade import PaperCloseRequest, PaperTradeEventResponse, PaperTradeResponse
+from app.schemas.paper_trade import (
+    PaperCloseRequest,
+    PaperOpenPositionValuationResponse,
+    PaperTradeEventResponse,
+    PaperTradeResponse,
+)
 from app.schemas.strategy import StrategyOneEvaluationResponse, StrategyOneMarketEvaluationTrace
 from app.services.market.context_service import ContextService
 from app.services.market.market_store import MarketStoreService
 from app.services.paper.paper_trade_service import PaperTradeError, PaperTradeService
+from app.services.paper.paper_valuation import compute_open_position_valuation
 from app.services.strategy.strategy_one_spy import StrategyOneEvalInput, evaluate_strategy_one_spy
 
 router = APIRouter(prefix="/paper/strategy/spy/strategy-1", tags=["paper"])
@@ -103,6 +109,37 @@ def list_open_paper_positions(db: Session = Depends(get_db)) -> list[PaperTradeR
     repo = PaperTradeRepository(db)
     rows = repo.list_open(strategy_id=PaperTradeService.STRATEGY_ID)
     return [PaperTradeResponse.model_validate(r) for r in rows]
+
+
+@router.get("/positions/open/valuation", response_model=list[PaperOpenPositionValuationResponse])
+def list_open_paper_position_valuations(
+    db: Session = Depends(get_db),
+    market: MarketStoreService = Depends(get_market_service),
+) -> list[PaperOpenPositionValuationResponse]:
+    """Mark-to-market all open Strategy 1 paper rows against one latest chain snapshot."""
+    settings = get_settings()
+    market.resolve_spy_market_for_evaluation()
+    chain = market.get_latest_chain()
+    repo = PaperTradeRepository(db)
+    rows = repo.list_open(strategy_id=PaperTradeService.STRATEGY_ID)
+    return [compute_open_position_valuation(r, chain, settings) for r in rows]
+
+
+@router.get("/positions/{paper_trade_id}/valuation", response_model=PaperOpenPositionValuationResponse)
+def get_open_paper_position_valuation(
+    paper_trade_id: int,
+    db: Session = Depends(get_db),
+    market: MarketStoreService = Depends(get_market_service),
+) -> PaperOpenPositionValuationResponse:
+    """Mark-to-market one open paper row; 404 if missing, wrong strategy, or not open."""
+    settings = get_settings()
+    repo = PaperTradeRepository(db)
+    row = repo.get_trade(paper_trade_id)
+    if row is None or row.strategy_id != PaperTradeService.STRATEGY_ID or row.status != "open":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="open_paper_trade_not_found")
+    market.resolve_spy_market_for_evaluation()
+    chain = market.get_latest_chain()
+    return compute_open_position_valuation(row, chain, settings)
 
 
 @router.get("/positions/closed", response_model=list[PaperTradeResponse])
