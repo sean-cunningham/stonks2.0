@@ -61,3 +61,5 @@ class StrategyOneEvaluationResponse(BaseModel):
     contract_candidate: NearAtmContract | None = None
     evaluation_timestamp: datetime
     market_evaluation_trace: StrategyOneMarketEvaluationTrace | None = None
+    # When true, paper entry may assign promoted_swing horizon if DTE is in 7–21 (never implicit).
+    swing_promotion_eligible: bool = False

@@ -15,7 +15,8 @@ from app.core.database import Base
 from app.models.trade import PaperTrade
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.schemas.market import ChainLatestResponse, NearAtmContract
-from app.services.paper.paper_trade_service import OPTION_CONTRACT_MULTIPLIER, PaperTradeService
+from app.services.paper.contract_constants import OPTION_CONTRACT_MULTIPLIER
+from app.services.paper.paper_trade_service import PaperTradeService
 from app.services.paper.paper_valuation import compute_open_position_valuation
 import app.models.trade  # noqa: F401
 

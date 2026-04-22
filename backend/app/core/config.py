@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     CONTEXT_STARTUP_REFRESH: bool = False
     CONTEXT_MAX_BARS_PERSISTED_PER_TF: int = 600
 
+    # Paper Strategy 1 — small-account profile for entry-time sizing (not broker equity).
+    PAPER_STRATEGY1_ACCOUNT_EQUITY_USD: float = 5000.0
+
     model_config = SettingsConfigDict(
         env_file=str(BASE_DIR / ".env"),
         env_file_encoding="utf-8",

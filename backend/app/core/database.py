@@ -78,28 +78,54 @@ def ensure_market_snapshot_schema() -> None:
 
 
 def ensure_paper_trade_schema() -> None:
-    """Additive SQLite columns for paper_trades (existing local DBs)."""
-    if not settings.DATABASE_URL.startswith("sqlite"):
-        return
-    with engine.begin() as connection:
-        table = connection.execute(
-            text("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'")
-        ).fetchone()
-        if not table:
-            return
-        rows = connection.execute(text("PRAGMA table_info(paper_trades)")).fetchall()
-        existing = {row[1] for row in rows}
-        expected_columns: dict[str, str] = {
-            "entry_decision": "VARCHAR(16) DEFAULT ''",
-            "evaluation_snapshot_json": "JSON",
-            "entry_reference_basis": "VARCHAR(32) DEFAULT 'option_ask'",
-            "exit_reference_basis": "VARCHAR(32)",
-            "exit_reason": "TEXT",
-            "entry_evaluation_fingerprint": "VARCHAR(256) DEFAULT ''",
-        }
-        for column, ddl_type in expected_columns.items():
-            if column not in existing:
-                connection.execute(text(f"ALTER TABLE paper_trades ADD COLUMN {column} {ddl_type}"))
+    """Additive columns for paper_trades (existing local DBs / Postgres)."""
+    dialect = make_url(settings.DATABASE_URL).get_dialect().name
+    if dialect == "sqlite":
+        with engine.begin() as connection:
+            table = connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='paper_trades'")
+            ).fetchone()
+            if not table:
+                return
+            rows = connection.execute(text("PRAGMA table_info(paper_trades)")).fetchall()
+            existing = {row[1] for row in rows}
+            expected_columns: dict[str, str] = {
+                "entry_decision": "VARCHAR(16) DEFAULT ''",
+                "evaluation_snapshot_json": "JSON",
+                "entry_reference_basis": "VARCHAR(32) DEFAULT 'option_ask'",
+                "exit_reference_basis": "VARCHAR(32)",
+                "exit_reason": "TEXT",
+                "entry_evaluation_fingerprint": "VARCHAR(256) DEFAULT ''",
+                "exit_policy": "JSON",
+                "sizing_policy": "JSON",
+            }
+            for column, ddl_type in expected_columns.items():
+                if column not in existing:
+                    connection.execute(text(f"ALTER TABLE paper_trades ADD COLUMN {column} {ddl_type}"))
+    elif dialect == "postgresql":
+        with engine.begin() as connection:
+            table = connection.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = 'public' AND table_name = 'paper_trades'"
+                )
+            ).fetchone()
+            if not table:
+                return
+            rows = connection.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = 'public' AND table_name = 'paper_trades'"
+                )
+            ).fetchall()
+            existing = {row[0] for row in rows}
+            expected_columns: dict[str, str] = {
+                "exit_policy": "JSONB",
+                "sizing_policy": "JSONB",
+            }
+            for column, ddl_type in expected_columns.items():
+                if column not in existing:
+                    connection.execute(text(f"ALTER TABLE paper_trades ADD COLUMN {column} {ddl_type}"))
 
 
 def ensure_paper_trade_open_contract_unique_index() -> None:

@@ -32,6 +32,8 @@ class PaperTradeResponse(BaseModel):
     exit_reference_basis: str | None = None
     exit_reason: str | None = None
     realized_pnl: float | None = None
+    exit_policy: dict[str, Any] | None = None
+    sizing_policy: dict[str, Any] | None = None
 
 
 class PaperTradeEventResponse(BaseModel):
@@ -65,5 +67,7 @@ class PaperOpenPositionValuationResponse(BaseModel):
     underlying_reference_price: float | None = None
     evaluation_snapshot_reference: dict[str, Any] | None = None
     valuation_error: str | None = None
+    exit_policy: dict[str, Any] | None = None
+    sizing_policy: dict[str, Any] | None = None
 
 

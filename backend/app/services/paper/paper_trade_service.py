@@ -12,8 +12,11 @@ from app.models.trade import PaperTrade, PaperTradeEvent
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.schemas.market import ChainLatestResponse, MarketStatusResponse, NearAtmContract
 from app.schemas.strategy import StrategyOneEvaluationResponse
-
-OPTION_CONTRACT_MULTIPLIER = 100
+from app.services.paper.contract_constants import OPTION_CONTRACT_MULTIPLIER
+from app.services.paper.strategy_one_entry_policies import (
+    EntryPolicyRejected,
+    assign_exit_and_sizing_policies_v1,
+)
 
 
 class PaperTradeError(Exception):
@@ -136,6 +139,18 @@ class PaperTradeService:
             raise PaperTradeError("duplicate_open_position")
 
         now = repo.utc_now()
+        try:
+            exit_pol, sizing_pol = assign_exit_and_sizing_policies_v1(
+                evaluation=evaluation,
+                contract=cand,
+                entry_ask_per_share=float(quote.ask),
+                quantity=1,
+                account_equity_usd=float(settings.PAPER_STRATEGY1_ACCOUNT_EQUITY_USD),
+                entry_clock_utc=now,
+            )
+        except EntryPolicyRejected as exc:
+            raise PaperTradeError(exc.code) from exc
+
         snap = evaluation.model_dump(mode="json")
         row = PaperTrade(
             strategy_id=self.STRATEGY_ID,
@@ -155,6 +170,8 @@ class PaperTradeService:
             exit_reference_basis=None,
             exit_reason=None,
             entry_evaluation_fingerprint=fingerprint,
+            exit_policy=exit_pol.model_dump(mode="json"),
+            sizing_policy=sizing_pol.model_dump(mode="json"),
         )
         try:
             row = repo.create_trade(row)
@@ -169,6 +186,11 @@ class PaperTradeService:
                     "entry_reference_basis": "option_ask",
                     "entry_price_per_share": row.entry_price,
                     "entry_evaluation_fingerprint": fingerprint,
+                    "exit_policy_version": exit_pol.policy_version,
+                    "trade_horizon_class": exit_pol.trade_horizon_class,
+                    "sizing_profile": sizing_pol.sizing_profile,
+                    "risk_budget_usd": sizing_pol.risk_budget_usd,
+                    "max_affordable_premium_usd": sizing_pol.max_affordable_premium_usd,
                     "chain_snapshot_time": chain.snapshot_timestamp.isoformat()
                     if chain.snapshot_timestamp
                     else None,

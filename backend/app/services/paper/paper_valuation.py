@@ -9,7 +9,7 @@ from app.core.config import Settings
 from app.models.trade import PaperTrade
 from app.schemas.market import ChainLatestResponse, NearAtmContract
 from app.schemas.paper_trade import PaperOpenPositionValuationResponse
-from app.services.paper.paper_trade_service import OPTION_CONTRACT_MULTIPLIER
+from app.services.paper.contract_constants import OPTION_CONTRACT_MULTIPLIER
 
 
 def _quote_age_seconds(chain: ChainLatestResponse, *, now: datetime) -> float | None:
@@ -61,6 +61,9 @@ def compute_open_position_valuation(
     qty = int(row.quantity)
     entry_px = float(row.entry_price)
 
+    pol_exit = row.exit_policy if isinstance(getattr(row, "exit_policy", None), dict) else None
+    pol_size = row.sizing_policy if isinstance(getattr(row, "sizing_policy", None), dict) else None
+
     def _empty(
         *,
         valuation_error: str | None,
@@ -87,6 +90,8 @@ def compute_open_position_valuation(
             underlying_reference_price=chain.underlying_reference_price,
             evaluation_snapshot_reference=_evaluation_reference(row),
             valuation_error=valuation_error,
+            exit_policy=pol_exit,
+            sizing_policy=pol_size,
         )
 
     if not chain.available or not chain.option_quotes_available:
@@ -141,4 +146,6 @@ def compute_open_position_valuation(
         underlying_reference_price=chain.underlying_reference_price,
         evaluation_snapshot_reference=_evaluation_reference(row),
         valuation_error=None,
+        exit_policy=pol_exit,
+        sizing_policy=pol_size,
     )
