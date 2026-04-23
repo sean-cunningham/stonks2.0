@@ -52,6 +52,7 @@ export type DashboardResponse = {
     realized_pnl: number;
     unrealized_pnl: number;
     total_pnl: number;
+    current_cash: number | null;
     trade_count: number;
     win_rate: number | null;
     avg_win: number | null;

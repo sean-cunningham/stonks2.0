@@ -42,6 +42,7 @@ class StrategyHeadlineMetrics(BaseModel):
     realized_pnl: float
     unrealized_pnl: float
     total_pnl: float
+    current_cash: float | None = None
     trade_count: int
     win_rate: float | None = None
     avg_win: float | None = None

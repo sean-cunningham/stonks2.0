@@ -146,6 +146,8 @@ def build_strategy_one_dashboard(
     candidate_blocked = eval_now.decision in ("candidate_call", "candidate_put") and auto_open_failure_count > 0
 
     metrics = compute_headline_metrics(closed=closed_chrono, unrealized_pnl=unrealized_total, open_count=len(open_rows))
+    open_cost_basis = sum(float(r.entry_price) * int(r.quantity) * 100.0 for r in open_rows)
+    metrics.current_cash = float(settings.PAPER_STRATEGY1_ACCOUNT_EQUITY_USD) + float(metrics.realized_pnl) - open_cost_basis
     timeseries = build_mvp_timeseries(
         closed_chronological=closed_chrono,
         current_unrealized_pnl=unrealized_total,

@@ -12,6 +12,7 @@ function fmt(value: number | null, percent = false): string {
 
 export default function HeadlineMetricsCards({ metrics }: Props) {
   const cards = [
+    ["Current cash", fmt(metrics.current_cash)],
     ["Realized P&L", fmt(metrics.realized_pnl)],
     ["Unrealized P&L", fmt(metrics.unrealized_pnl)],
     ["Total P&L", fmt(metrics.total_pnl)],

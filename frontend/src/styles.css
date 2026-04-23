@@ -246,13 +246,26 @@ body {
   color: #94a3b8;
 }
 
-.cycle-filters select {
-  min-width: 150px;
-  background: #0f172a;
-  color: #e5e7eb;
+.multi-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  padding: 6px 8px;
   border: 1px solid #334155;
   border-radius: 8px;
-  padding: 6px 8px;
+  background: #0f172a;
+}
+
+.check-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.check-inline input[type="checkbox"] {
+  accent-color: #60a5fa;
 }
 
 .cycle-filter-summary {

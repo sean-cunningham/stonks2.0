@@ -15,8 +15,22 @@ type Props = {
 };
 
 type TimeWindow = "15m" | "30m" | "60m" | "today" | "all";
-type StatusFilter = "all" | "no_action" | "opened" | "closed" | "blocked" | "error";
-type ActionFilter = "all" | "open" | "close" | "none";
+type StatusFilter = "no_action" | "opened" | "closed" | "blocked" | "error";
+type ActionFilter = "open" | "close" | "none";
+
+const STATUS_OPTIONS: Array<{ value: StatusFilter; label: string }> = [
+  { value: "no_action", label: "No action" },
+  { value: "opened", label: "Opened" },
+  { value: "closed", label: "Closed" },
+  { value: "blocked", label: "Blocked" },
+  { value: "error", label: "Error" },
+];
+
+const ACTION_OPTIONS: Array<{ value: ActionFilter; label: string }> = [
+  { value: "open", label: "Open" },
+  { value: "close", label: "Close" },
+  { value: "none", label: "None" },
+];
 
 function isAutoOpenFailed(notes: string | null | undefined): boolean {
   return Boolean(notes?.includes("auto_open_failed:"));
@@ -42,8 +56,11 @@ function badgeClass(category: string): string {
 
 export default function CycleHistoryTable({ rows }: Props) {
   const [timeWindow, setTimeWindow] = useState<TimeWindow>("30m");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [actionFilter, setActionFilter] = useState<ActionFilter>("all");
+  const [statusFilters, setStatusFilters] = useState<StatusFilter[]>([]);
+  const [actionFilters, setActionFilters] = useState<ActionFilter[]>([]);
+
+  const toggleInList = <T extends string>(items: T[], value: T): T[] =>
+    items.includes(value) ? items.filter((v) => v !== value) : [...items, value];
 
   const filteredRows = useMemo(() => {
     const now = new Date();
@@ -60,15 +77,15 @@ export default function CycleHistoryTable({ rows }: Props) {
       if (timeWindow === "today" && easternDateBucket(started) !== todayKey) return false;
 
       const category = cycleDisplayCategory(r) as StatusFilter;
-      if (statusFilter !== "all" && category !== statusFilter) return false;
+      if (statusFilters.length > 0 && !statusFilters.includes(category)) return false;
 
       const actionCategory: ActionFilter =
         r.cycle_action === "opened" ? "open" : r.cycle_action === "closed" ? "close" : "none";
-      if (actionFilter !== "all" && actionCategory !== actionFilter) return false;
+      if (actionFilters.length > 0 && !actionFilters.includes(actionCategory)) return false;
 
       return true;
     });
-  }, [actionFilter, rows, statusFilter, timeWindow]);
+  }, [actionFilters, rows, statusFilters, timeWindow]);
 
   return (
     <section className="panel">
@@ -93,23 +110,49 @@ export default function CycleHistoryTable({ rows }: Props) {
             </label>
             <label>
               System result
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}>
-                <option value="all">All</option>
-                <option value="no_action">No action</option>
-                <option value="opened">Opened</option>
-                <option value="closed">Closed</option>
-                <option value="blocked">Blocked</option>
-                <option value="error">Error</option>
-              </select>
+              <div className="multi-checks">
+                <label className="check-inline">
+                  <input
+                    type="checkbox"
+                    checked={statusFilters.length === 0}
+                    onChange={() => setStatusFilters([])}
+                  />
+                  All
+                </label>
+                {STATUS_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="check-inline">
+                    <input
+                      type="checkbox"
+                      checked={statusFilters.includes(opt.value)}
+                      onChange={() => setStatusFilters((prev) => toggleInList(prev, opt.value))}
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
             </label>
             <label>
               Action taken
-              <select value={actionFilter} onChange={(e) => setActionFilter(e.target.value as ActionFilter)}>
-                <option value="all">All</option>
-                <option value="open">Open</option>
-                <option value="close">Close</option>
-                <option value="none">None</option>
-              </select>
+              <div className="multi-checks">
+                <label className="check-inline">
+                  <input
+                    type="checkbox"
+                    checked={actionFilters.length === 0}
+                    onChange={() => setActionFilters([])}
+                  />
+                  All
+                </label>
+                {ACTION_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="check-inline">
+                    <input
+                      type="checkbox"
+                      checked={actionFilters.includes(opt.value)}
+                      onChange={() => setActionFilters((prev) => toggleInList(prev, opt.value))}
+                    />
+                    {opt.label}
+                  </label>
+                ))}
+              </div>
             </label>
           </div>
           <div className="cycle-filter-summary muted">
