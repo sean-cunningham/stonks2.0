@@ -20,10 +20,16 @@ export default function SignalBlockerPanel({ signal, cycleSummary }: Props) {
     failures > 0 || (signal?.current_decision === "no_trade" && evalBlockers.length > 0);
 
   return (
-    <section className="panel panel-signal-priority">
+    <section id="panel-signal-blockers" className="panel panel-signal-priority">
       <h2>Current signal / blockers</h2>
       {!signal ? (
-        <div className="empty">Signal not available.</div>
+        <div className="empty empty-prose">
+          <p>No <code>current_signal</code> object in this dashboard response.</p>
+          <p className="muted small-print">
+            The live API normally includes decision, reasons, and blockers. If this persists after refresh, the backend
+            payload may be older than the dashboard contract.
+          </p>
+        </div>
       ) : (
         <>
           <div className="signal-top-row">

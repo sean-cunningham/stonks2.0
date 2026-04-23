@@ -35,7 +35,10 @@ export default function CycleHistoryTable({ rows }: Props) {
     <section className="panel">
       <h2>Recent cycle history</h2>
       {rows.length === 0 ? (
-        <div className="empty">No cycle history yet.</div>
+        <div className="empty empty-prose">
+          <p>No scheduler cycles in the recent window.</p>
+          <p className="muted small-print">When the runtime scheduler runs, each cycle will appear here with status and notes.</p>
+        </div>
       ) : (
         <div className="table-wrap">
           <table>

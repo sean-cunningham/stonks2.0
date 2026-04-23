@@ -12,6 +12,7 @@ export function buildStrategy1ViewModel(payload: DashboardResponse): StrategyDas
     cycleSummary: payload.cycle_summary ?? null,
     metrics: payload.headline_metrics,
     equitySeries: payload.timeseries.equity_or_value,
+    equitySeriesIsMinimalViable: payload.timeseries.is_minimal_viable,
     openPositions: payload.open_positions,
     closedTrades: payload.recent_closed_trades,
     cycleHistory: payload.recent_cycle_history,

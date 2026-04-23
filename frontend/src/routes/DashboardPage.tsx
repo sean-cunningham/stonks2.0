@@ -13,18 +13,46 @@ import type { DashboardResponse } from "../types/dashboard";
 
 const POLL_MS = 5000;
 
+/**
+ * Poll every `intervalMs` only while the document is visible; clear the interval while hidden.
+ */
 function useVisibilityPoll(callback: () => void, intervalMs: number): void {
   useEffect(() => {
-    callback();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") callback();
-    }, intervalMs);
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") callback();
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    const tick = () => {
+      if (document.visibilityState === "visible") {
+        void callback();
+      }
     };
+
+    const arm = () => {
+      if (timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+      if (document.visibilityState !== "visible") {
+        return;
+      }
+      tick();
+      timer = setInterval(tick, intervalMs);
+    };
+
+    arm();
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        tick();
+        arm();
+      } else if (timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    };
+
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      window.clearInterval(timer);
+      if (timer !== undefined) clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [callback, intervalMs]);
@@ -33,16 +61,18 @@ function useVisibilityPoll(callback: () => void, intervalMs: number): void {
 export default function DashboardPage() {
   const { symbol = "spy", strategyId = "strategy-1" } = useParams();
   const [data, setData] = useState<DashboardResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const out = await fetchDashboard(symbol, strategyId);
       setData(out);
-      setError(null);
+      setFetchError(null);
+      setActionError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setFetchError(err instanceof Error ? err.message : String(err));
     }
   }, [symbol, strategyId]);
 
@@ -59,11 +89,12 @@ export default function DashboardPage() {
   const runAction = useCallback(
     async (fn: () => Promise<unknown>) => {
       setBusy(true);
+      setActionError(null);
       try {
         await fn();
         await load();
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        setActionError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
       }
@@ -71,21 +102,26 @@ export default function DashboardPage() {
     [load]
   );
 
-  if (error && !data) return <main className="page">Error loading dashboard: {error}</main>;
-  if (!vm) return <main className="page">Loading dashboard...</main>;
+  if (fetchError && !data) {
+    return <main className="page">Error loading dashboard: {fetchError}</main>;
+  }
+  if (!vm) {
+    return <main className="page">Loading dashboard...</main>;
+  }
 
   return (
     <>
-      {error && <div className="error-strip">Action error: {error}</div>}
+      {fetchError && <div className="error-strip">Refresh failed: {fetchError}</div>}
+      {actionError && <div className="error-strip">Action failed: {actionError}</div>}
       <StrategyDashboardShell
         vm={vm}
         actionBusy={busy}
         onPauseToggle={() => runAction(() => setPause(symbol, strategyId, !vm.runtime.paused))}
         onEntryToggle={() => runAction(() => setEntryEnabled(symbol, strategyId, !vm.runtime.entry_enabled))}
         onExitToggle={() => runAction(() => setExitEnabled(symbol, strategyId, !vm.runtime.exit_enabled))}
-        onCloseNow={(paperTradeId) => {
+        onCloseNow={(paperTradeId, optionSymbol) => {
           const ok = window.confirm(
-            `Emergency Close Now for paper trade ${paperTradeId}? This is an immediate manual override.`
+            `Emergency Close Now?\n\nTrade #${paperTradeId}\n${optionSymbol}\n\nThis is an immediate manual override.`
           );
           if (!ok) return;
           void runAction(() => closeNow(symbol, strategyId, paperTradeId));

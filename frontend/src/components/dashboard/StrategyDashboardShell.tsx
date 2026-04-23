@@ -16,7 +16,7 @@ type Props = {
   onPauseToggle: () => void;
   onEntryToggle: () => void;
   onExitToggle: () => void;
-  onCloseNow: (paperTradeId: number) => void;
+  onCloseNow: (paperTradeId: number, optionSymbol: string) => void;
 };
 
 export default function StrategyDashboardShell({
@@ -39,6 +39,7 @@ export default function StrategyDashboardShell({
       <RuntimeHealthBanner runtime={vm.runtime} limitations={vm.limitations} />
       <RuntimeControlsPanel
         runtime={vm.runtime}
+        controls={vm.controls}
         disableActions={actionBusy}
         onPauseToggle={onPauseToggle}
         onEntryToggle={onEntryToggle}
@@ -46,8 +47,13 @@ export default function StrategyDashboardShell({
       />
 
       <HeadlineMetricsCards metrics={vm.metrics} />
-      <EquityChartPanel points={vm.equitySeries} />
-      <OpenPositionsTable rows={vm.openPositions} disableActions={actionBusy} onCloseNow={onCloseNow} />
+      <EquityChartPanel points={vm.equitySeries} isMinimalViable={vm.equitySeriesIsMinimalViable} />
+      <OpenPositionsTable
+        rows={vm.openPositions}
+        emergencyCloseSupported={vm.controls.emergency_close_supported}
+        disableActions={actionBusy}
+        onCloseNow={onCloseNow}
+      />
       <ClosedTradesTable rows={vm.closedTrades} />
       <CycleHistoryTable rows={vm.cycleHistory} />
       <LimitationsPanel limitations={vm.limitations} />

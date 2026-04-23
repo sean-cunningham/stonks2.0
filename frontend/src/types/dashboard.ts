@@ -110,6 +110,8 @@ export type StrategyDashboardViewModel = {
   cycleSummary: NonNullable<DashboardResponse["cycle_summary"]> | null;
   metrics: DashboardResponse["headline_metrics"];
   equitySeries: DashboardPoint[];
+  /** Backend marks MVP / estimated equity curve (sparse early session). */
+  equitySeriesIsMinimalViable: boolean;
   openPositions: DashboardResponse["open_positions"];
   closedTrades: DashboardResponse["recent_closed_trades"];
   cycleHistory: DashboardResponse["recent_cycle_history"];
