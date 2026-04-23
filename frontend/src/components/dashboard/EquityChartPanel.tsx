@@ -1,5 +1,6 @@
 import { Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { DashboardPoint } from "../../types/dashboard";
+import { formatEasternDateTime, formatEasternTimeOnly } from "../../utils/formatEasternTime";
 
 type Props = {
   points: DashboardPoint[];
@@ -11,7 +12,7 @@ export default function EquityChartPanel({ points, isMinimalViable }: Props) {
 
   return (
     <section className="panel">
-      <h2>Equity / value over time (MVP)</h2>
+      <h2>Equity / value over time (MVP, ET)</h2>
       {points.length === 0 ? (
         <div className="empty empty-prose">
           <p>No time-series points yet.</p>
@@ -24,17 +25,21 @@ export default function EquityChartPanel({ points, isMinimalViable }: Props) {
         <>
           {sparse && isMinimalViable && (
             <div className="chart-banner muted">
-              Early / sparse series — MVP estimate, not full mark-to-market history.
+              Early / sparse series — MVP estimate, not full mark-to-market history. Times are US Eastern (ET).
             </div>
           )}
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height={280}>
               <LineChart data={points}>
-                <XAxis dataKey="timestamp" tickFormatter={(v) => new Date(v).toLocaleTimeString()} minTickGap={32} />
+                <XAxis
+                  dataKey="timestamp"
+                  tickFormatter={(v) => formatEasternTimeOnly(v as string)}
+                  minTickGap={32}
+                />
                 <YAxis />
                 <Tooltip
-                  labelFormatter={(v) => new Date(v).toLocaleString()}
-                  formatter={(v: number) => [`$${v.toFixed(2)}`, "Equity/Value"]}
+                  labelFormatter={(v) => formatEasternDateTime(v as string)}
+                  formatter={(v: number) => [`$${v.toFixed(2)}`, "Equity / value"]}
                 />
                 <Line type="monotone" dataKey="value" stroke="#60a5fa" strokeWidth={2} dot={false} />
               </LineChart>

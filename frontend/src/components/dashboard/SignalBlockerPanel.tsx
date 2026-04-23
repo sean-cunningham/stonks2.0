@@ -1,4 +1,11 @@
 import type { StrategyDashboardViewModel } from "../../types/dashboard";
+import {
+  buildNoTradeBecauseLine,
+  humanizeDecision,
+  humanizePaperTradeCode,
+  humanizeReason,
+  humanizeBlocker,
+} from "../../utils/dashboardHumanize";
 
 type Props = {
   signal: StrategyDashboardViewModel["currentSignal"];
@@ -21,73 +28,98 @@ export default function SignalBlockerPanel({ signal, cycleSummary }: Props) {
 
   return (
     <section id="panel-signal-blockers" className="panel panel-signal-priority">
-      <h2>Current signal / blockers</h2>
+      <h2>Current trading status</h2>
       {!signal ? (
         <div className="empty empty-prose">
-          <p>No <code>current_signal</code> object in this dashboard response.</p>
+          <p>Trading status is not included in this dashboard response.</p>
           <p className="muted small-print">
-            The live API normally includes decision, reasons, and blockers. If this persists after refresh, the backend
-            payload may be older than the dashboard contract.
+            After a refresh you should see the bot decision, plain-English reasons, and why it is not trading. If this
+            stays empty, the API may be older than the dashboard.
           </p>
         </div>
       ) : (
         <>
           <div className="signal-top-row">
-            <span className={decisionBadgeClass(signal.current_decision)}>{signal.current_decision}</span>
+            <span className={decisionBadgeClass(signal.current_decision)} title={signal.current_decision}>
+              {humanizeDecision(signal.current_decision)}
+            </span>
             <span className="signal-meta">
-              Candidate blocked (auto-open failures in recent cycles):{" "}
-              <strong>{signal.candidate_blocked ? "yes" : "no"}</strong>
+              A setup is showing, but recent automatic opens failed:{" "}
+              <strong>{signal.candidate_blocked ? "Yes" : "No"}</strong>
             </span>
           </div>
 
           {signal.candidate_blocked && signal.candidate_block_reason && (
             <div className="signal-highlight">
-              <strong>Auto-open blocked — most common failure code:</strong> {signal.candidate_block_reason}
+              <strong>Most common automatic-open issue:</strong>{" "}
+              {humanizePaperTradeCode(signal.candidate_block_reason)}
             </div>
           )}
 
-          {primaryAutoOpen && !signal.candidate_blocked && (
+          {primaryAutoOpen && !signal.candidate_blocked && failures > 0 && (
             <div className="muted signal-subtle">
-              Recent cycles: most common <code>auto_open_failed</code> code was{" "}
-              <strong>{primaryAutoOpen}</strong> ({failures} failure{failures === 1 ? "" : "s"} in window).
+              In the last 50 cycles, automatic opens failed {failures} time{failures === 1 ? "" : "s"}. Most common
+              issue: {humanizePaperTradeCode(primaryAutoOpen)}
             </div>
           )}
 
           <div className="signal-grid">
             <div>
-              <strong>Current blockers (evaluator)</strong>
+              <strong>Why the bot is not trading</strong>
               <div className="signal-body">
-                {signal.current_blockers.length ? signal.current_blockers.join(" · ") : "none"}
+                {signal.current_blockers.length
+                  ? signal.current_blockers.map((b) => humanizeBlocker(b)).join(" · ")
+                  : signal.current_decision === "no_trade"
+                    ? "No hard blockers — the strategy simply does not see a tradeable setup right now."
+                    : "No evaluator blockers for this snapshot."}
               </div>
             </div>
             <div>
-              <strong>Current reasons</strong>
+              <strong>What supports the current view</strong>
               <div className="signal-body">
-                {signal.current_reasons.length ? signal.current_reasons.join(" · ") : "none"}
+                {signal.current_reasons.length
+                  ? signal.current_reasons.map((r) => humanizeReason(r)).join(" · ")
+                  : "No supporting detail lines for this snapshot."}
               </div>
             </div>
           </div>
+
+          <details className="technical-details">
+            <summary>Technical details (debug)</summary>
+            <pre className="technical-pre">
+              {JSON.stringify(
+                {
+                  current_decision: signal.current_decision,
+                  current_blockers: signal.current_blockers,
+                  current_reasons: signal.current_reasons,
+                  candidate_blocked: signal.candidate_blocked,
+                  candidate_block_reason: signal.candidate_block_reason,
+                },
+                null,
+                2
+              )}
+            </pre>
+          </details>
         </>
       )}
 
       {showWhyCard && (
         <article className="why-card">
-          <h3>Why not trading?</h3>
+          <h3>Why nothing traded</h3>
           {failures > 0 && (
             <div className="why-line">
-              <strong>Recent auto-open failures (last 50 cycles):</strong> {failures}
+              <strong>Recent automatic-open failures (last 50 cycles):</strong> {failures}
               {primaryAutoOpen && (
                 <>
                   {" "}
-                  — primary code: <code>{primaryAutoOpen}</code>
+                  — <span className="human-em">{humanizePaperTradeCode(primaryAutoOpen)}</span>{" "}
+                  <span className="muted mono">({primaryAutoOpen})</span>
                 </>
               )}
             </div>
           )}
           {signal && signal.current_decision === "no_trade" && evalBlockers.length > 0 && (
-            <div className="why-line">
-              <strong>Evaluator is in no_trade</strong> with blockers: {evalBlockers.join(" · ")}
-            </div>
+            <div className="why-line human-em">{buildNoTradeBecauseLine(evalBlockers)}</div>
           )}
         </article>
       )}

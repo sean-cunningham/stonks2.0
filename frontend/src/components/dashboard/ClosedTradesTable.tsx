@@ -1,4 +1,5 @@
 import type { DashboardResponse } from "../../types/dashboard";
+import { formatEasternDateTime } from "../../utils/formatEasternTime";
 
 type Row = DashboardResponse["recent_closed_trades"][number];
 
@@ -30,7 +31,8 @@ export default function ClosedTradesTable({ rows }: Props) {
               <tr>
                 <th>Trade ID</th>
                 <th>Contract</th>
-                <th>Exit time</th>
+                <th>Entry (ET)</th>
+                <th>Exit (ET)</th>
                 <th>Realized P&amp;L</th>
                 <th>Exit reason</th>
               </tr>
@@ -40,9 +42,10 @@ export default function ClosedTradesTable({ rows }: Props) {
                 <tr key={`${r.paper_trade_id}-${r.exit_time ?? "open"}`}>
                   <td>{r.paper_trade_id}</td>
                   <td className="mono">{r.option_symbol}</td>
-                  <td>{r.exit_time ? new Date(r.exit_time).toLocaleString() : "n/a"}</td>
+                  <td>{formatEasternDateTime(r.entry_time)}</td>
+                  <td>{r.exit_time ? formatEasternDateTime(r.exit_time) : "—"}</td>
                   <td>{money(r.realized_pnl)}</td>
-                  <td>{r.exit_reason ?? "n/a"}</td>
+                  <td>{r.exit_reason ?? "—"}</td>
                 </tr>
               ))}
             </tbody>

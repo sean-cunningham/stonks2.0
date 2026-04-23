@@ -1,4 +1,6 @@
 import type { DashboardResponse } from "../../types/dashboard";
+import { humanizeMonitorState } from "../../utils/dashboardHumanize";
+import { formatEasternDateTime } from "../../utils/formatEasternTime";
 
 type Position = DashboardResponse["open_positions"][number];
 
@@ -27,8 +29,8 @@ export default function OpenPositionsTable({
         <div className="empty empty-prose">
           <p>Flat book — no open paper positions.</p>
           <p className="muted small-print">
-            New entries need runtime entry enabled, a live <code>candidate_*</code> signal, and passing paper gates.
-            Check <a href="#panel-signal-blockers">current signal / blockers</a> above when the scheduler is running.
+            New entries need the bot allowed to trade, a live call or put setup, and passing paper checks. See{" "}
+            <a href="#panel-signal-blockers">current trading status</a> above when the scheduler is running.
           </p>
         </div>
       ) : (
@@ -38,10 +40,11 @@ export default function OpenPositionsTable({
               <tr>
                 <th>Trade ID</th>
                 <th>Contract</th>
+                <th>Entered (ET)</th>
                 <th>Qty</th>
                 <th>Mark</th>
                 <th>Unrealized P&amp;L</th>
-                <th>Monitor state</th>
+                <th>Position state</th>
                 <th>Action</th>
               </tr>
             </thead>
@@ -50,10 +53,19 @@ export default function OpenPositionsTable({
                 <tr key={r.paper_trade_id}>
                   <td>{r.paper_trade_id}</td>
                   <td className="mono">{r.option_symbol}</td>
+                  <td>{formatEasternDateTime(r.entry_time)}</td>
                   <td>{r.quantity}</td>
                   <td>{money(r.mark_price)}</td>
                   <td>{money(r.unrealized_pnl)}</td>
-                  <td>{r.monitor_state ?? "n/a"}</td>
+                  <td>
+                    <span title={r.monitor_state ?? ""}>{humanizeMonitorState(r.monitor_state)}</span>
+                    {r.monitor_state && (
+                      <details className="technical-inline nested">
+                        <summary>Raw</summary>
+                        <code>{r.monitor_state}</code>
+                      </details>
+                    )}
+                  </td>
                   <td>
                     <button
                       disabled={disableActions || !emergencyCloseSupported}

@@ -15,14 +15,14 @@ export default function HeadlineMetricsCards({ metrics }: Props) {
     ["Realized P&L", fmt(metrics.realized_pnl)],
     ["Unrealized P&L", fmt(metrics.unrealized_pnl)],
     ["Total P&L", fmt(metrics.total_pnl)],
-    ["Trade Count", String(metrics.trade_count)],
-    ["Win Rate", fmt(metrics.win_rate, true)],
-    ["Open Positions", String(metrics.open_position_count)],
+    ["Trade count", String(metrics.trade_count)],
+    ["Win rate", fmt(metrics.win_rate, true)],
+    ["Open positions", String(metrics.open_position_count)],
   ] as const;
 
   return (
     <section className="panel">
-      <h2>Headline Metrics</h2>
+      <h2>At a glance</h2>
       <div className="cards-grid">
         {cards.map(([label, value]) => (
           <article key={label} className="metric-card">

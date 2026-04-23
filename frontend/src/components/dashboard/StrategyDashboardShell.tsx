@@ -1,4 +1,5 @@
 import type { StrategyDashboardViewModel } from "../../types/dashboard";
+import { formatEasternDateTime } from "../../utils/formatEasternTime";
 import RuntimeHealthBanner from "./RuntimeHealthBanner";
 import RuntimeControlsPanel from "./RuntimeControlsPanel";
 import HeadlineMetricsCards from "./HeadlineMetricsCards";
@@ -31,7 +32,7 @@ export default function StrategyDashboardShell({
     <main className="page">
       <header className="page-header">
         <h1>{vm.title}</h1>
-        <div className="muted">Last updated: {new Date(vm.asOf).toLocaleString()}</div>
+        <div className="muted">Last updated: {formatEasternDateTime(vm.asOf)}</div>
       </header>
 
       <SignalBlockerPanel signal={vm.currentSignal} cycleSummary={vm.cycleSummary} />

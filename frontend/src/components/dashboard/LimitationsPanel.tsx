@@ -1,3 +1,5 @@
+import { humanizeLimitation } from "../../utils/dashboardHumanize";
+
 type Props = {
   limitations: string[];
 };
@@ -5,13 +7,19 @@ type Props = {
 export default function LimitationsPanel({ limitations }: Props) {
   return (
     <section className="panel">
-      <h2>Limitations / Errors</h2>
+      <h2>Data caveats</h2>
       {limitations.length === 0 ? (
-        <div className="empty">No backend limitations reported.</div>
+        <div className="empty">No extra data caveats from the server.</div>
       ) : (
-        <ul>
+        <ul className="limitations-list">
           {limitations.map((item) => (
-            <li key={item}>{item}</li>
+            <li key={item}>
+              {humanizeLimitation(item)}
+              <details className="technical-inline nested">
+                <summary>Raw</summary>
+                <code>{item}</code>
+              </details>
+            </li>
           ))}
         </ul>
       )}

@@ -1,4 +1,6 @@
 import type { DashboardResponse } from "../../types/dashboard";
+import { humanizeAutoOpenNotes, humanizeCycleBadgeCategory } from "../../utils/dashboardHumanize";
+import { formatEasternDateTime } from "../../utils/formatEasternTime";
 
 type Row = DashboardResponse["recent_cycle_history"][number];
 
@@ -10,8 +12,7 @@ function isAutoOpenFailed(notes: string | null | undefined): boolean {
   return Boolean(notes?.includes("auto_open_failed:"));
 }
 
-/** Badge label aligned with operational categories (may differ from raw `result`). */
-function cycleDisplayLabel(row: Row): string {
+function cycleDisplayCategory(row: Row): string {
   if (row.result === "opened") return "opened";
   if (row.result === "closed") return "closed";
   if (row.result === "error") return "error";
@@ -20,53 +21,67 @@ function cycleDisplayLabel(row: Row): string {
   return row.result;
 }
 
-function badgeClass(row: Row): string {
-  const label = cycleDisplayLabel(row);
-  if (label === "opened") return "status-opened";
-  if (label === "closed") return "status-closed";
-  if (label === "error") return "status-error";
-  if (label === "blocked") return "status-blocked";
-  if (label === "no_action") return "status-noaction";
+function badgeClass(category: string): string {
+  if (category === "opened") return "status-opened";
+  if (category === "closed") return "status-closed";
+  if (category === "error") return "status-error";
+  if (category === "blocked") return "status-blocked";
+  if (category === "no_action") return "status-noaction";
   return "status-default";
 }
 
 export default function CycleHistoryTable({ rows }: Props) {
   return (
     <section className="panel">
-      <h2>Recent cycle history</h2>
+      <h2>Recent cycle history (ET)</h2>
       {rows.length === 0 ? (
         <div className="empty empty-prose">
           <p>No scheduler cycles in the recent window.</p>
-          <p className="muted small-print">When the runtime scheduler runs, each cycle will appear here with status and notes.</p>
+          <p className="muted small-print">When the scheduler runs, each cycle appears here with Eastern times.</p>
         </div>
       ) : (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Started</th>
-                <th>Status</th>
-                <th>Raw result</th>
+                <th>Started (ET)</th>
+                <th>Finished (ET)</th>
+                <th>What happened</th>
+                <th>Machine result</th>
                 <th>Cycle action</th>
-                <th>Error</th>
+                <th>Error code</th>
                 <th>Notes</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r, i) => {
-                const label = cycleDisplayLabel(r);
+                const category = cycleDisplayCategory(r);
+                const humanNotes = humanizeAutoOpenNotes(r.notes_summary);
                 return (
                   <tr key={`${r.started_at}-${i}`}>
-                    <td>{new Date(r.started_at).toLocaleString()}</td>
+                    <td>{formatEasternDateTime(r.started_at)}</td>
+                    <td>{r.finished_at ? formatEasternDateTime(r.finished_at) : "—"}</td>
                     <td>
-                      <span className={`status-badge ${badgeClass(r)}`} title={`Raw result: ${r.result}`}>
-                        {label}
+                      <span className={`status-badge ${badgeClass(category)}`} title={`Machine result: ${r.result}`}>
+                        {humanizeCycleBadgeCategory(category)}
                       </span>
                     </td>
                     <td className="muted mono">{r.result}</td>
-                    <td>{r.cycle_action ?? "n/a"}</td>
-                    <td>{r.error_code ?? "n/a"}</td>
-                    <td className="notes-cell">{r.notes_summary ?? "n/a"}</td>
+                    <td className="mono">{r.cycle_action ?? "—"}</td>
+                    <td className="mono">{r.error_code ?? "—"}</td>
+                    <td className="notes-cell">
+                      {humanNotes ? (
+                        <>
+                          <div>{humanNotes}</div>
+                          <details className="notes-raw">
+                            <summary>Raw notes</summary>
+                            <pre>{r.notes_summary ?? "—"}</pre>
+                          </details>
+                        </>
+                      ) : (
+                        r.notes_summary ?? "—"
+                      )}
+                    </td>
                   </tr>
                 );
               })}

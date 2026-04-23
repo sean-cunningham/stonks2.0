@@ -159,6 +159,79 @@ body {
   margin-top: 8px;
 }
 
+.human-em {
+  color: #e5e7eb;
+}
+
+.technical-details {
+  margin-top: 12px;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  padding: 4px 8px;
+}
+
+.technical-details > summary {
+  cursor: pointer;
+  color: #94a3b8;
+  font-size: 13px;
+  user-select: none;
+}
+
+.technical-pre {
+  margin: 8px 0 0;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-x: auto;
+  color: #cbd5e1;
+}
+
+.technical-pre.compact {
+  margin-top: 4px;
+}
+
+.technical-inline {
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.technical-inline > summary {
+  cursor: pointer;
+  color: #94a3b8;
+  user-select: none;
+}
+
+.technical-inline.nested {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.strategy-technical {
+  margin-top: 14px;
+}
+
+.notes-raw {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.notes-raw pre {
+  margin: 4px 0 0;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.limitations-list {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.limitations-list li {
+  margin-bottom: 8px;
+}
+
 .banner {
   background: #1f2937;
   border: 1px solid #334155;
