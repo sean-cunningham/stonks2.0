@@ -4,14 +4,21 @@ const EASTERN = "America/New_York";
 
 const easternDateTime = new Intl.DateTimeFormat("en-US", {
   timeZone: EASTERN,
-  dateStyle: "medium",
-  timeStyle: "medium",
+  year: "numeric",
+  month: "short",
+  day: "2-digit",
+  hour: "numeric",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: true,
   timeZoneName: "short",
 });
 
 const easternTimeOnly = new Intl.DateTimeFormat("en-US", {
   timeZone: EASTERN,
-  timeStyle: "short",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
   timeZoneName: "short",
 });
 
