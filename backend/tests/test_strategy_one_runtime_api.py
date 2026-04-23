@@ -39,8 +39,11 @@ class StrategyOneRuntimeApiTests(unittest.TestCase):
         ):
             status_before = client.get("/paper/strategy/spy/strategy-1/runtime/status")
             self.assertEqual(status_before.status_code, 200, status_before.text)
-            self.assertFalse(status_before.json()["paused"])
-            self.assertIn("scheduler_enabled", status_before.json())
+            body = status_before.json()
+            self.assertFalse(body["paused"])
+            self.assertIn("scheduler_enabled", body)
+            self.assertIn("market_window_open", body)
+            self.assertIn("runtime_sleep_reason", body)
 
             paused = client.post("/paper/strategy/spy/strategy-1/runtime/pause")
             self.assertEqual(paused.status_code, 200, paused.text)

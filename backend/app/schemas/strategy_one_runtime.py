@@ -20,4 +20,6 @@ class StrategyOneRuntimeStatusResponse(BaseModel):
     last_cycle_finished_at: datetime | None = None
     last_cycle_result: str | None = None
     last_error: str | None = None
+    market_window_open: bool = False
+    runtime_sleep_reason: str | None = None
 

@@ -10,6 +10,7 @@ from app.core.config import Settings
 from app.schemas.strategy_one_paper_execution import StrategyOneExecuteOnceResponse
 from app.services.paper.strategy_one_runtime_service import (
     RESULT_ERROR,
+    SKIPPED_OUTSIDE_EXECUTION_WINDOW,
     SKIPPED_OVERLAP,
     SKIPPED_PAUSED,
     StrategyOneRuntimeCoordinator,
@@ -42,9 +43,12 @@ class StrategyOneRuntimeServiceTests(unittest.TestCase):
         st.paused = True
         repo = MagicMock()
         repo.get_or_create_state.return_value = st
-        with patch(
-            "app.services.paper.strategy_one_runtime_service.StrategyRuntimeRepository",
-            return_value=repo,
+        with (
+            patch(
+                "app.services.paper.strategy_one_runtime_service.StrategyRuntimeRepository",
+                return_value=repo,
+            ),
+            patch("app.services.paper.strategy_one_runtime_service.is_within_spy_rth_et", return_value=False),
         ):
             out = coord.run_tick(self.db, context=self.context, market=self.market, settings=self.settings)
         self.assertEqual(out.last_cycle_result, SKIPPED_PAUSED)
@@ -60,9 +64,12 @@ class StrategyOneRuntimeServiceTests(unittest.TestCase):
         lock.acquire()
         coord._lock = lock
         try:
-            with patch(
-                "app.services.paper.strategy_one_runtime_service.StrategyRuntimeRepository",
-                return_value=repo,
+            with (
+                patch(
+                    "app.services.paper.strategy_one_runtime_service.StrategyRuntimeRepository",
+                    return_value=repo,
+                ),
+                patch("app.services.paper.strategy_one_runtime_service.is_within_spy_rth_et", return_value=True),
             ):
                 out = coord.run_tick(self.db, context=self.context, market=self.market, settings=self.settings)
         finally:
@@ -86,6 +93,7 @@ class StrategyOneRuntimeServiceTests(unittest.TestCase):
                 "app.services.paper.strategy_one_runtime_service.StrategyRuntimeRepository",
                 return_value=repo,
             ),
+            patch("app.services.paper.strategy_one_runtime_service.is_within_spy_rth_et", return_value=True),
             patch(
                 "app.services.paper.strategy_one_runtime_service.run_strategy_one_paper_execute_once",
                 return_value=cycle,
@@ -106,6 +114,7 @@ class StrategyOneRuntimeServiceTests(unittest.TestCase):
                 "app.services.paper.strategy_one_runtime_service.StrategyRuntimeRepository",
                 return_value=repo,
             ),
+            patch("app.services.paper.strategy_one_runtime_service.is_within_spy_rth_et", return_value=True),
             patch(
                 "app.services.paper.strategy_one_runtime_service.run_strategy_one_paper_execute_once",
                 side_effect=RuntimeError("boom"),
@@ -114,3 +123,41 @@ class StrategyOneRuntimeServiceTests(unittest.TestCase):
             out = coord.run_tick(self.db, context=self.context, market=self.market, settings=self.settings)
         self.assertEqual(out.last_cycle_result, RESULT_ERROR)
         self.assertEqual(out.last_error, "boom")
+
+    def test_outside_rth_skips_execute_and_cycle_log(self) -> None:
+        coord = StrategyOneRuntimeCoordinator()
+        st = _state()
+        repo = MagicMock()
+        repo.get_or_create_state.return_value = st
+        with (
+            patch(
+                "app.services.paper.strategy_one_runtime_service.StrategyRuntimeRepository",
+                return_value=repo,
+            ),
+            patch("app.services.paper.strategy_one_runtime_service.is_within_spy_rth_et", return_value=False),
+            patch(
+                "app.services.paper.strategy_one_runtime_service.run_strategy_one_paper_execute_once",
+            ) as exec_once_mock,
+        ):
+            out = coord.run_tick(self.db, context=self.context, market=self.market, settings=self.settings)
+        self.assertEqual(out.last_cycle_result, SKIPPED_OUTSIDE_EXECUTION_WINDOW)
+        self.assertFalse(out.market_window_open)
+        self.assertEqual(out.runtime_sleep_reason, "outside_rth")
+        exec_once_mock.assert_not_called()
+        repo.append_cycle_log.assert_not_called()
+
+    def test_outside_rth_no_log_spam_across_ticks(self) -> None:
+        coord = StrategyOneRuntimeCoordinator()
+        st = _state()
+        repo = MagicMock()
+        repo.get_or_create_state.return_value = st
+        with (
+            patch(
+                "app.services.paper.strategy_one_runtime_service.StrategyRuntimeRepository",
+                return_value=repo,
+            ),
+            patch("app.services.paper.strategy_one_runtime_service.is_within_spy_rth_et", return_value=False),
+        ):
+            for _ in range(5):
+                coord.run_tick(self.db, context=self.context, market=self.market, settings=self.settings)
+        repo.append_cycle_log.assert_not_called()

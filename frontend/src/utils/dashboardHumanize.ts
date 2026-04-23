@@ -27,11 +27,23 @@ const CYCLE_RESULTS: Record<string, string> = {
   closed: "Closed a trade",
   error: "Error",
   skipped_paused: "Skipped because the bot is paused",
+  skipped_outside_execution_window: "Outside regular market hours (no cycle run)",
+  skipped_overlapping_cycle: "Skipped because a cycle was already running",
 };
 
 export function humanizeCycleResult(result: string | null | undefined): string {
   if (result == null || result === "") return "—";
   return CYCLE_RESULTS[result] ?? snakeToTitleCase(result);
+}
+
+const RUNTIME_SLEEP: Record<string, string> = {
+  paused: "Bot is paused",
+  outside_rth: "Outside US market hours (weekdays 9:30 AM–4:00 PM Eastern)",
+};
+
+export function humanizeRuntimeSleepReason(reason: string | null | undefined): string | null {
+  if (reason == null || reason === "") return null;
+  return RUNTIME_SLEEP[reason] ?? snakeToTitleCase(reason);
 }
 
 /** Badge category after derived logic (opened, closed, error, blocked, no_action, …) */

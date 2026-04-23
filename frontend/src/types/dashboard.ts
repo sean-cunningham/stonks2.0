@@ -10,6 +10,10 @@ export type RuntimeView = {
   last_cycle_finished_at: string | null;
   last_cycle_result: string | null;
   last_error: string | null;
+  /** US/Eastern regular session (weekday 9:30–16:00) at status time */
+  market_window_open?: boolean;
+  /** Why the scheduler is idle: paused | outside_rth | null when the window is open and not paused */
+  runtime_sleep_reason?: string | null;
 };
 
 export type DashboardPoint = {

@@ -179,6 +179,8 @@ def build_strategy_one_dashboard(
             last_cycle_finished_at=runtime.last_cycle_finished_at,
             last_cycle_result=runtime.last_cycle_result,
             last_error=runtime.last_error,
+            market_window_open=runtime.market_window_open,
+            runtime_sleep_reason=runtime.runtime_sleep_reason,
         ),
         controls=StrategyControlsView(),
         current_signal=StrategyCurrentSignal(
