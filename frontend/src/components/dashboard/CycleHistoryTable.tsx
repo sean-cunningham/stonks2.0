@@ -5,7 +5,7 @@ import {
   extractAffordabilityDiagnosticsFromNotes,
   humanizeCycleAction,
   humanizeCycleBadgeCategory,
-  humanizeCycleDetails,
+  humanizeCycleMainReason,
   humanizeCycleResult,
 } from "../../utils/dashboardHumanize";
 import { easternDateBucket, formatEasternDateTime, parseApiDate } from "../../utils/formatEasternTime";
@@ -176,7 +176,7 @@ export default function CycleHistoryTable({ rows }: Props) {
             <tbody>
               {filteredRows.map((r, i) => {
                 const category = cycleDisplayCategory(r);
-                const humanDetails = humanizeCycleDetails(r.notes_summary);
+                const humanDetails = humanizeCycleMainReason(r.notes_summary);
                 const affordabilityDiag = extractAffordabilityDiagnosticsFromNotes(r.notes_summary);
                 const affordabilityRows = affordabilityDiagnosticRows(affordabilityDiag);
                 return (

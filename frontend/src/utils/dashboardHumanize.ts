@@ -154,6 +154,31 @@ export function humanizeCycleDetails(notes: string | null | undefined): string {
   return tokens.map(humanizeCycleNoteToken).join(" · ");
 }
 
+export function humanizeCycleMainReason(notes: string | null | undefined): string {
+  if (!notes) return "—";
+  const tokens = notes
+    .split("|")
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  if (!tokens.length) return "—";
+
+  const autoOpen = tokens.find((t) => t.startsWith("auto_open_failed:"));
+  if (autoOpen) return humanizeCycleNoteToken(autoOpen);
+
+  const affordability = extractAffordabilityDiagnosticsFromNotes(notes);
+  if (affordability) {
+    return summarizeAffordabilityDiagnostics(affordability) ?? "Premium exceeded the risk budget.";
+  }
+
+  const failedGate = tokens.find((t) => t.startsWith("diag_primary_failed_gate:"));
+  if (failedGate) {
+    const gate = failedGate.split("diag_primary_failed_gate:", 2)[1]?.trim();
+    return gate ? `Primary failed gate: ${humanizeFailedGate(gate)}.` : "A primary evaluation gate failed.";
+  }
+
+  return humanizeCycleNoteToken(tokens[0]!);
+}
+
 const FAILED_GATES: Record<string, string> = {
   context_live_ready: "Context live-readiness",
   market_ready: "Market readiness",
