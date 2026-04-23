@@ -22,6 +22,11 @@ from app.services.paper.strategy_one_entry_policies import (
 class PaperTradeError(Exception):
     """Fail-closed paper action (caller maps to HTTP 400)."""
 
+    def __init__(self, code: str, *, details: dict | None = None) -> None:
+        super().__init__(code)
+        self.code = code
+        self.details = details or {}
+
 
 def _chain_age_seconds(chain: ChainLatestResponse) -> float | None:
     if chain.snapshot_timestamp is None:
@@ -149,7 +154,7 @@ class PaperTradeService:
                 entry_clock_utc=now,
             )
         except EntryPolicyRejected as exc:
-            raise PaperTradeError(exc.code) from exc
+            raise PaperTradeError(exc.code, details=exc.details) from exc
 
         snap = evaluation.model_dump(mode="json")
         row = PaperTrade(

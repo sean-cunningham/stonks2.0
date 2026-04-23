@@ -37,10 +37,14 @@ def build_mvp_timeseries(
     *,
     closed_chronological: list[PaperTrade],
     current_unrealized_pnl: float,
+    starting_cash: float,
+    current_cash: float,
     as_of: datetime,
 ) -> StrategyTimeseries:
     realized_curve: list[TimeSeriesPoint] = []
     equity_curve: list[TimeSeriesPoint] = []
+    return_pct_curve: list[TimeSeriesPoint] = []
+    cash_curve: list[TimeSeriesPoint] = []
     limitations = [
         "equity_or_value is an MVP estimate from closed-trade realized steps plus current open snapshot; full historical MTM is not persisted",
     ]
@@ -52,14 +56,29 @@ def build_mvp_timeseries(
         realized += float(row.realized_pnl or 0.0)
         pt = TimeSeriesPoint(timestamp=row.exit_time, value=realized)
         realized_curve.append(pt)
-        equity_curve.append(pt)
+        equity_curve.append(TimeSeriesPoint(timestamp=row.exit_time, value=float(starting_cash) + realized))
+        cash_curve.append(TimeSeriesPoint(timestamp=row.exit_time, value=float(starting_cash) + realized))
 
     if not equity_curve:
-        equity_curve.append(TimeSeriesPoint(timestamp=as_of, value=float(current_unrealized_pnl)))
+        equity_curve.append(TimeSeriesPoint(timestamp=as_of, value=float(starting_cash) + float(current_unrealized_pnl)))
+        cash_curve.append(TimeSeriesPoint(timestamp=as_of, value=float(current_cash)))
         realized_curve.append(TimeSeriesPoint(timestamp=as_of, value=0.0))
     else:
-        equity_curve.append(TimeSeriesPoint(timestamp=as_of, value=realized + float(current_unrealized_pnl)))
+        equity_curve.append(
+            TimeSeriesPoint(
+                timestamp=as_of,
+                value=float(starting_cash) + realized + float(current_unrealized_pnl),
+            )
+        )
+        cash_curve.append(TimeSeriesPoint(timestamp=as_of, value=float(current_cash)))
         realized_curve.append(TimeSeriesPoint(timestamp=as_of, value=realized))
+
+    for p in equity_curve:
+        if starting_cash > 0:
+            pct = ((p.value - float(starting_cash)) / float(starting_cash)) * 100.0
+        else:
+            pct = 0.0
+        return_pct_curve.append(TimeSeriesPoint(timestamp=p.timestamp, value=pct))
 
     # Optional drawdown derived from same MVP series.
     peak = None
@@ -73,6 +92,8 @@ def build_mvp_timeseries(
 
     ts = StrategyTimeseries(
         equity_or_value=equity_curve,
+        equity_return_pct=return_pct_curve,
+        cash_over_time=cash_curve,
         realized_pnl_cumulative=realized_curve,
         drawdown=drawdown_curve,
         is_minimal_viable=True,

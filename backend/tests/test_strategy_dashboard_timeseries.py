@@ -38,13 +38,17 @@ class StrategyDashboardTimeseriesTests(unittest.TestCase):
         ts = build_mvp_timeseries(
             closed_chronological=[_closed_at(t1, 10.0, 1), _closed_at(t2, -3.0, 2)],
             current_unrealized_pnl=5.0,
+            starting_cash=1000.0,
+            current_cash=1007.0,
             as_of=as_of,
         )
         self.assertTrue(ts.is_minimal_viable)
         self.assertTrue(any("MVP estimate" in s for s in ts.limitations))
         self.assertEqual(ts.realized_pnl_cumulative[-1].value, 7.0)
         self.assertEqual(ts.equity_or_value[-1].timestamp, as_of)
-        self.assertEqual(ts.equity_or_value[-1].value, 12.0)
+        self.assertEqual(ts.equity_or_value[-1].value, 1012.0)
+        self.assertEqual(ts.cash_over_time[-1].value, 1007.0)
+        self.assertAlmostEqual(ts.equity_return_pct[-1].value, 1.2, places=6)
 
     def test_drawdown_from_curve(self) -> None:
         t1 = datetime(2026, 1, 1, 12, 1, tzinfo=timezone.utc)

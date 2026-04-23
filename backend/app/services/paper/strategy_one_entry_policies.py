@@ -14,7 +14,7 @@ from app.services.paper.contract_constants import OPTION_CONTRACT_MULTIPLIER
 _ET = ZoneInfo("America/New_York")
 
 PREMIUM_FAIL_SAFE_FRACTION = 0.35
-MAX_RISK_FRACTION = 0.02
+MAX_RISK_FRACTION = 0.05
 MAX_CONTRACTS_SMALL_ACCOUNT = 1
 INTRADAY_DTE_MIN = 2
 INTRADAY_DTE_MAX = 5
@@ -25,9 +25,10 @@ SWING_DTE_MAX = 21
 class EntryPolicyRejected(Exception):
     """Fail-closed policy gate at entry; caller maps to PaperTradeError."""
 
-    def __init__(self, code: str) -> None:
+    def __init__(self, code: str, *, details: dict[str, Any] | None = None) -> None:
         super().__init__(code)
         self.code = code
+        self.details = details or {}
 
 
 def calendar_dte_to_expiration_us_eastern(*, expiration_date_str: str, as_of_utc: datetime) -> int:
@@ -80,7 +81,22 @@ def build_sizing_policy_v1(
     max_affordable_total = risk_budget / PREMIUM_FAIL_SAFE_FRACTION
     entry_total = float(entry_ask_per_share) * OPTION_CONTRACT_MULTIPLIER * quantity
     if entry_total > max_affordable_total + 1e-6:
-        raise EntryPolicyRejected("paper_entry_premium_exceeds_risk_budget")
+        raise EntryPolicyRejected(
+            "paper_entry_premium_exceeds_risk_budget",
+            details={
+                "attempted_ask": float(entry_ask_per_share),
+                "attempted_total_premium_usd": float(entry_total),
+                "account_equity_used": float(account_equity_usd),
+                "max_risk_pct_used": float(MAX_RISK_FRACTION),
+                "fail_safe_stop_pct_used": float(PREMIUM_FAIL_SAFE_FRACTION),
+                "risk_budget_usd": float(risk_budget),
+                "max_affordable_premium_usd": float(max_affordable_total),
+                "premium_over_budget_usd": float(entry_total - max_affordable_total),
+                "quantity": int(quantity),
+                "contract_multiplier": int(OPTION_CONTRACT_MULTIPLIER),
+                "affordability_block_reason": "premium_exceeds_risk_budget",
+            },
+        )
     return Strategy1SizingPolicyV1(
         account_equity_usd=float(account_equity_usd),
         max_risk_pct=MAX_RISK_FRACTION,
@@ -144,9 +160,22 @@ def assign_exit_and_sizing_policies_v1(
         promotion_requires_explicit_eligibility=True,
     )
 
-    sizing = build_sizing_policy_v1(
-        account_equity_usd=account_equity_usd,
-        entry_ask_per_share=entry_ask_per_share,
-        quantity=quantity,
-    )
+    try:
+        sizing = build_sizing_policy_v1(
+            account_equity_usd=account_equity_usd,
+            entry_ask_per_share=entry_ask_per_share,
+            quantity=quantity,
+        )
+    except EntryPolicyRejected as exc:
+        details = dict(exc.details)
+        details.update(
+            {
+                "attempted_option_symbol": contract.option_symbol,
+                "attempted_side": "long",
+                "attempted_expiration_date": contract.expiration_date,
+                "attempted_strike": float(contract.strike) if contract.strike is not None else None,
+                "entry_clock_utc": entry_clock_utc.isoformat(),
+            }
+        )
+        raise EntryPolicyRejected(exc.code, details=details) from exc
     return exit_policy, sizing

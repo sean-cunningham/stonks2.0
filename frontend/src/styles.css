@@ -223,6 +223,23 @@ body {
   word-break: break-word;
 }
 
+.affordability-grid {
+  margin: 8px 0 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px 10px;
+}
+
+.affordability-grid dt {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.affordability-grid dd {
+  margin: 2px 0 0;
+  font-size: 12px;
+}
+
 .limitations-list {
   margin: 0;
   padding-left: 1.2rem;
@@ -270,6 +287,38 @@ body {
 
 .cycle-filter-summary {
   margin-bottom: 8px;
+}
+
+.panel-row-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.segment-toggle {
+  display: inline-flex;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.seg-btn {
+  background: #0f172a;
+  color: #cbd5e1;
+  border: none;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.seg-btn + .seg-btn {
+  border-left: 1px solid #334155;
+}
+
+.seg-btn.active {
+  background: #1d4ed8;
+  color: #fff;
 }
 
 .banner {

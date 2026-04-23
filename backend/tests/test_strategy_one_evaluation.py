@@ -481,6 +481,36 @@ class StrategyOneEvaluationTests(unittest.TestCase):
         out = evaluate_strategy_one_spy(inp, now=EVAL_CLOCK)
         self.assertEqual(out.decision, "no_trade")
         self.assertIn("no_acceptable_option_contract_in_intraday_dte_band_2_5", out.blockers)
+        self.assertIsNotNone(out.diagnostics)
+        self.assertEqual(out.diagnostics.primary_failed_gate, "contract_selected")
+        self.assertFalse(out.diagnostics.gate_pass["contract_selected"])
+
+    def test_diagnostics_context_gate_failure(self) -> None:
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(live=False, block="market_closed"),
+            summary=_summary(px=510.0, vwap=505.0, orh=508.0, orl=502.0, atr=1.5, swing_h=506.0, swing_l=500.0),
+            market=_market(),
+            chain=_chain(contracts=[_good_call()]),
+        )
+        out = evaluate_strategy_one_spy(inp, now=EVAL_CLOCK)
+        self.assertEqual(out.decision, "no_trade")
+        self.assertIsNotNone(out.diagnostics)
+        self.assertEqual(out.diagnostics.primary_failed_gate, "context_live_ready")
+        self.assertIn("context not ready", (out.diagnostics.explanation or "").lower())
+
+    def test_diagnostics_include_chop_near_miss_values(self) -> None:
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(),
+            summary=_summary(px=500.1, vwap=500.0, orh=510.0, orl=490.0, atr=2.0, swing_h=515.0, swing_l=485.0),
+            market=_market(),
+            chain=_chain(contracts=[_good_call()]),
+        )
+        out = evaluate_strategy_one_spy(inp, now=EVAL_CLOCK)
+        self.assertEqual(out.decision, "no_trade")
+        self.assertIsNotNone(out.diagnostics)
+        self.assertEqual(out.diagnostics.primary_failed_gate, "outside_chop_zone")
+        self.assertIn("abs_price_minus_vwap", out.diagnostics.near_miss)
+        self.assertIn("chop_band_threshold", out.diagnostics.near_miss)
 
 
 if __name__ == "__main__":

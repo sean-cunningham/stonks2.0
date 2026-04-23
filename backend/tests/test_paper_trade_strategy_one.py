@@ -321,7 +321,7 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
             self.assertIsInstance(row.exit_policy, dict)
             self.assertIsInstance(row.sizing_policy, dict)
             self.assertEqual(row.exit_policy.get("trade_horizon_class"), "intraday_continuation")
-            self.assertEqual(row.sizing_policy.get("risk_budget_usd"), 100.0)
+            self.assertEqual(row.sizing_policy.get("risk_budget_usd"), 250.0)
             repo = PaperTradeRepository(db)
             events = repo.list_events_for_trade(row.id)
             self.assertEqual(len(events), 1)
@@ -683,7 +683,7 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
             db.close()
 
     def test_rejects_when_premium_exceeds_small_account_risk_budget(self) -> None:
-        """$5k @ 2% => $100 budget; @ 35% fail-safe max total premium ≈ $285.71; $286 debit rejects."""
+        """$5k @ 5% => $250 budget; @ 35% fail-safe max total premium ≈ $714.29; $720 debit rejects."""
         db = self.Session()
         try:
             settings = Settings(
@@ -693,10 +693,10 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
             )
             ev0 = _candidate_call_eval()
             assert ev0.contract_candidate is not None
-            c = ev0.contract_candidate.model_copy(update={"ask": 2.86, "mid": (2.0 + 2.86) / 2.0})
+            c = ev0.contract_candidate.model_copy(update={"ask": 7.20, "mid": (2.0 + 7.20) / 2.0})
             ev = ev0.model_copy(update={"contract_candidate": c})
             exp_iso = c.expiration_date or ""
-            ch = _fresh_chain(bid=2.0, ask=2.86, sym=c.option_symbol, expiration_iso=exp_iso)
+            ch = _fresh_chain(bid=2.0, ask=7.20, sym=c.option_symbol, expiration_iso=exp_iso)
             with self.assertRaises(PaperTradeError) as ctx:
                 self.svc.open_position(
                     db,
@@ -706,6 +706,12 @@ class PaperTradeStrategyOneServiceTests(unittest.TestCase):
                     settings=settings,
                 )
             self.assertEqual(str(ctx.exception), "paper_entry_premium_exceeds_risk_budget")
+            self.assertIn("attempted_total_premium_usd", ctx.exception.details)
+            self.assertIn("risk_budget_usd", ctx.exception.details)
+            self.assertIn("max_affordable_premium_usd", ctx.exception.details)
+            self.assertEqual(ctx.exception.details.get("attempted_option_symbol"), c.option_symbol)
+            self.assertEqual(ctx.exception.details.get("attempted_expiration_date"), exp_iso)
+            self.assertEqual(ctx.exception.details.get("attempted_side"), "long")
         finally:
             db.close()
 

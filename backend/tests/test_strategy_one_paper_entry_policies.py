@@ -77,16 +77,23 @@ class StrategyOnePaperEntryPolicyTests(unittest.TestCase):
         as_of = datetime.now(timezone.utc)
         self.assertEqual(calendar_dte_to_expiration_us_eastern(expiration_date_str=target, as_of_utc=as_of), 4)
 
-    def test_sizing_fivek_two_percent_budget_and_max_affordable(self) -> None:
+    def test_sizing_fivek_five_percent_budget_and_max_affordable(self) -> None:
         s = build_sizing_policy_v1(account_equity_usd=5000.0, entry_ask_per_share=2.2, quantity=1)
-        self.assertAlmostEqual(s.risk_budget_usd, 100.0, places=6)
-        self.assertAlmostEqual(s.max_affordable_premium_usd, 100.0 / 0.35, places=6)
+        self.assertAlmostEqual(s.risk_budget_usd, 250.0, places=6)
+        self.assertAlmostEqual(s.max_affordable_premium_usd, 250.0 / 0.35, places=6)
         self.assertAlmostEqual(s.entry_total_premium_usd, 220.0, places=6)
 
     def test_affordability_rejects_over_budget(self) -> None:
         with self.assertRaises(EntryPolicyRejected) as ctx:
-            build_sizing_policy_v1(account_equity_usd=5000.0, entry_ask_per_share=2.86, quantity=1)
+            build_sizing_policy_v1(account_equity_usd=5000.0, entry_ask_per_share=7.20, quantity=1)
         self.assertEqual(ctx.exception.code, "paper_entry_premium_exceeds_risk_budget")
+        d = ctx.exception.details
+        self.assertEqual(d["attempted_ask"], 7.20)
+        self.assertAlmostEqual(d["attempted_total_premium_usd"], 720.0, places=6)
+        self.assertAlmostEqual(d["risk_budget_usd"], 250.0, places=6)
+        self.assertAlmostEqual(d["max_affordable_premium_usd"], 250.0 / 0.35, places=6)
+        self.assertAlmostEqual(d["premium_over_budget_usd"], 720.0 - (250.0 / 0.35), places=6)
+        self.assertEqual(d["affordability_block_reason"], "premium_exceeds_risk_budget")
 
     def test_assign_defaults_to_intraday_when_not_swing_eligible(self) -> None:
         et = ZoneInfo("America/New_York")
@@ -123,12 +130,12 @@ class StrategyOnePaperEntryPolicyTests(unittest.TestCase):
     def test_sizing_policy_v1_schema_fields(self) -> None:
         s = Strategy1SizingPolicyV1(
             account_equity_usd=5000.0,
-            max_risk_pct=0.02,
+            max_risk_pct=0.05,
             max_contracts=1,
             quantity=1,
-            risk_budget_usd=100.0,
+            risk_budget_usd=250.0,
             fail_safe_stop_pct=0.35,
-            max_affordable_premium_usd=100.0 / 0.35,
+            max_affordable_premium_usd=250.0 / 0.35,
             entry_ask_per_share=2.2,
             entry_total_premium_usd=220.0,
         )

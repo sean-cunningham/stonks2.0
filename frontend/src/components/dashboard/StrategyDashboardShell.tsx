@@ -4,6 +4,7 @@ import RuntimeHealthBanner from "./RuntimeHealthBanner";
 import RuntimeControlsPanel from "./RuntimeControlsPanel";
 import HeadlineMetricsCards from "./HeadlineMetricsCards";
 import EquityChartPanel from "./EquityChartPanel";
+import CashChartPanel from "./CashChartPanel";
 import OpenPositionsTable from "./OpenPositionsTable";
 import ClosedTradesTable from "./ClosedTradesTable";
 import CycleHistoryTable from "./CycleHistoryTable";
@@ -48,7 +49,12 @@ export default function StrategyDashboardShell({
       />
 
       <HeadlineMetricsCards metrics={vm.metrics} />
-      <EquityChartPanel points={vm.equitySeries} isMinimalViable={vm.equitySeriesIsMinimalViable} />
+      <EquityChartPanel
+        equityPoints={vm.equitySeries}
+        returnPctPoints={vm.equityReturnSeries}
+        isMinimalViable={vm.equitySeriesIsMinimalViable}
+      />
+      <CashChartPanel points={vm.cashSeries} />
       <OpenPositionsTable
         rows={vm.openPositions}
         emergencyCloseSupported={vm.controls.emergency_close_supported}

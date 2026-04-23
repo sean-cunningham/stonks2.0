@@ -50,6 +50,17 @@ class StrategyOneContextSnapshot(BaseModel):
     quote_stale: bool | None = None
 
 
+class StrategyOneEvaluationDiagnostics(BaseModel):
+    """Gate diagnostics and near-miss context for no-trade analysis."""
+
+    gate_pass: dict[str, bool] = Field(default_factory=dict)
+    primary_failed_gate: str | None = None
+    failed_gates: list[str] = Field(default_factory=list)
+    near_miss: dict[str, float | bool | str | None] = Field(default_factory=dict)
+    contract_gate: dict[str, int | bool | None] = Field(default_factory=dict)
+    explanation: str | None = None
+
+
 class StrategyOneEvaluationResponse(BaseModel):
     """Structured read-only decision for Strategy 1 on SPY."""
 
@@ -63,3 +74,4 @@ class StrategyOneEvaluationResponse(BaseModel):
     market_evaluation_trace: StrategyOneMarketEvaluationTrace | None = None
     # When true, paper entry may assign promoted_swing horizon if DTE is in 7–21 (never implicit).
     swing_promotion_eligible: bool = False
+    diagnostics: StrategyOneEvaluationDiagnostics | None = None

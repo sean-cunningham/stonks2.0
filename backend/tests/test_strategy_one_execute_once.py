@@ -227,6 +227,44 @@ class ExecuteOnceUnitTests(unittest.TestCase):
         self.assertEqual(out.cycle_action, "no_action")
         self.assertTrue(any("duplicate" in n for n in out.notes))
 
+    def test_affordability_failure_includes_diagnostics_note(self) -> None:
+        ev = MagicMock(spec=StrategyOneEvaluationResponse)
+        ev.decision = "candidate_call"
+        ev.diagnostics = None
+        repo_inst = MagicMock()
+        repo_inst.list_open.return_value = []
+        err = PaperTradeError(
+            "paper_entry_premium_exceeds_risk_budget",
+            details={
+                "attempted_option_symbol": "SPY  260422C00500000",
+                "attempted_ask": 2.86,
+                "attempted_total_premium_usd": 286.0,
+                "risk_budget_usd": 100.0,
+                "max_affordable_premium_usd": 285.7142857,
+                "premium_over_budget_usd": 0.2857143,
+            },
+        )
+        with (
+            patch(
+                "app.services.paper.strategy_one_execute_once.PaperTradeRepository",
+                return_value=repo_inst,
+            ),
+            patch(
+                "app.services.paper.strategy_one_execute_once.build_strategy_one_evaluation_bundle",
+                return_value=(ev, _mkt(), _chain()),
+            ),
+            patch.object(PaperTradeService, "open_position", side_effect=err),
+        ):
+            out = run_strategy_one_paper_execute_once(
+                self.db,
+                context=self.context,
+                market=self.market,
+                settings=self.settings,
+            )
+        self.assertEqual(out.cycle_action, "no_action")
+        self.assertTrue(any(n.startswith("auto_open_failed:paper_entry_premium_exceeds_risk_budget") for n in out.notes))
+        self.assertTrue(any(n.startswith("affordability_diag:") for n in out.notes))
+
     def test_open_position_skipped_when_runtime_exit_disabled(self) -> None:
         row = MagicMock(spec=PaperTrade)
         row.id = 7

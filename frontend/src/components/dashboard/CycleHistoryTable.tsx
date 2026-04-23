@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import type { DashboardResponse } from "../../types/dashboard";
 import {
+  affordabilityDiagnosticRows,
+  extractAffordabilityDiagnosticsFromNotes,
   humanizeCycleAction,
   humanizeCycleBadgeCategory,
   humanizeCycleDetails,
@@ -175,6 +177,8 @@ export default function CycleHistoryTable({ rows }: Props) {
               {filteredRows.map((r, i) => {
                 const category = cycleDisplayCategory(r);
                 const humanDetails = humanizeCycleDetails(r.notes_summary);
+                const affordabilityDiag = extractAffordabilityDiagnosticsFromNotes(r.notes_summary);
+                const affordabilityRows = affordabilityDiagnosticRows(affordabilityDiag);
                 return (
                   <tr key={`${r.started_at}-${i}`}>
                     <td>{formatEasternDateTime(r.started_at)}</td>
@@ -189,6 +193,19 @@ export default function CycleHistoryTable({ rows }: Props) {
                     <td className="mono">{r.error_code ?? "—"}</td>
                     <td className="notes-cell">
                       <div>{humanDetails}</div>
+                      {affordabilityRows.length > 0 && (
+                        <details className="notes-raw">
+                          <summary>Affordability details</summary>
+                          <dl className="affordability-grid">
+                            {affordabilityRows.map((row) => (
+                              <div key={row.label}>
+                                <dt>{row.label}</dt>
+                                <dd>{row.value}</dd>
+                              </div>
+                            ))}
+                          </dl>
+                        </details>
+                      )}
                       <details className="notes-raw">
                         <summary>Technical details</summary>
                         <pre>

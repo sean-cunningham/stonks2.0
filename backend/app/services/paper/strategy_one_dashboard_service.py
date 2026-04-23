@@ -43,6 +43,33 @@ def _extract_auto_open_failure(notes_summary: str | None) -> str | None:
     return notes_summary.split(token, 1)[1].split("|", 1)[0].strip() or None
 
 
+def _extract_diag_primary_failed_gate(notes_summary: str | None) -> str | None:
+    if not notes_summary:
+        return None
+    token = "diag_primary_failed_gate:"
+    if token not in notes_summary:
+        return None
+    return notes_summary.split(token, 1)[1].split("|", 1)[0].strip() or None
+
+
+def _extract_affordability_details(notes_summary: str | None) -> dict[str, str] | None:
+    if not notes_summary:
+        return None
+    token = "affordability_diag:"
+    if token not in notes_summary:
+        return None
+    raw = notes_summary.split(token, 1)[1].split("|", 1)[0].strip()
+    if not raw:
+        return None
+    out: dict[str, str] = {}
+    for pair in raw.split(";"):
+        if "=" not in pair:
+            continue
+        k, v = pair.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out or None
+
+
 def build_strategy_one_dashboard(
     db: Session,
     *,
@@ -130,27 +157,44 @@ def build_strategy_one_dashboard(
         for r in cycle_rows
     ]
     result_counts: dict[str, int] = {}
+    failed_gate_counts: dict[str, int] = {}
     blocker_counts: dict[str, int] = {}
     auto_open_failure_count = 0
+    affordability_failure_count = 0
+    latest_affordability_details: dict[str, str] | None = None
     for r in cycle_rows:
         result_counts[r.result] = result_counts.get(r.result, 0) + 1
         blocker = _extract_auto_open_failure(r.notes_summary)
         if blocker:
             auto_open_failure_count += 1
             blocker_counts[blocker] = blocker_counts.get(blocker, 0) + 1
+            if blocker == "paper_entry_premium_exceeds_risk_budget":
+                affordability_failure_count += 1
+                parsed = _extract_affordability_details(r.notes_summary)
+                if parsed and latest_affordability_details is None:
+                    latest_affordability_details = parsed
+        failed_gate = _extract_diag_primary_failed_gate(r.notes_summary)
+        if failed_gate:
+            failed_gate_counts[failed_gate] = failed_gate_counts.get(failed_gate, 0) + 1
     primary_recent_blocker = (
         max(blocker_counts.items(), key=lambda kv: kv[1])[0] if blocker_counts else None
+    )
+    most_common_recent_failed_gate = (
+        max(failed_gate_counts.items(), key=lambda kv: kv[1])[0] if failed_gate_counts else None
     )
 
     eval_now, _, _ = build_strategy_one_evaluation_bundle(context, market, settings)
     candidate_blocked = eval_now.decision in ("candidate_call", "candidate_put") and auto_open_failure_count > 0
 
     metrics = compute_headline_metrics(closed=closed_chrono, unrealized_pnl=unrealized_total, open_count=len(open_rows))
+    starting_cash = float(settings.PAPER_STRATEGY1_ACCOUNT_EQUITY_USD)
     open_cost_basis = sum(float(r.entry_price) * int(r.quantity) * 100.0 for r in open_rows)
-    metrics.current_cash = float(settings.PAPER_STRATEGY1_ACCOUNT_EQUITY_USD) + float(metrics.realized_pnl) - open_cost_basis
+    metrics.current_cash = starting_cash + float(metrics.realized_pnl) - open_cost_basis
     timeseries = build_mvp_timeseries(
         closed_chronological=closed_chrono,
         current_unrealized_pnl=unrealized_total,
+        starting_cash=starting_cash,
+        current_cash=float(metrics.current_cash or 0.0),
         as_of=as_of,
     )
     metrics.max_drawdown = compute_max_drawdown_from_curve(timeseries.equity_or_value)
@@ -196,6 +240,11 @@ def build_strategy_one_dashboard(
             recent_auto_open_failure_count=auto_open_failure_count,
             primary_recent_blocker=primary_recent_blocker,
             recent_result_counts=result_counts,
+            recent_failed_gate_counts=failed_gate_counts,
+            most_common_recent_failed_gate=most_common_recent_failed_gate,
+            current_near_miss_explanation=eval_now.diagnostics.explanation if eval_now.diagnostics else None,
+            recent_affordability_failure_count=affordability_failure_count,
+            latest_affordability_diagnostics=latest_affordability_details,
         ),
         headline_metrics=metrics,
         open_positions=open_cards,

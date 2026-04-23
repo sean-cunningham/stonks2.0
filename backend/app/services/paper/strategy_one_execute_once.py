@@ -23,6 +23,44 @@ AUTO_EXIT_REASON = "strategy_1_auto_exit_close_now"
 EMERGENCY_EXIT_REASON = "emergency_manual_override"
 
 
+def _append_primary_failed_gate_note(notes: list[str], gate: str | None) -> None:
+    if gate:
+        notes.append(f"diag_primary_failed_gate:{gate}")
+
+
+def _append_affordability_details_note(notes: list[str], details: dict | None) -> None:
+    if not details:
+        return
+    keys = [
+        "attempted_option_symbol",
+        "attempted_side",
+        "attempted_expiration_date",
+        "attempted_strike",
+        "attempted_ask",
+        "attempted_total_premium_usd",
+        "account_equity_used",
+        "max_risk_pct_used",
+        "fail_safe_stop_pct_used",
+        "risk_budget_usd",
+        "max_affordable_premium_usd",
+        "premium_over_budget_usd",
+        "affordability_block_reason",
+    ]
+    parts: list[str] = []
+    for k in keys:
+        if k in details:
+            parts.append(f"{k}={details[k]}")
+    if parts:
+        notes.append("affordability_diag:" + ";".join(parts))
+
+
+def _primary_failed_gate_from_evaluation(evaluation) -> str | None:
+    diag = getattr(evaluation, "diagnostics", None)
+    if diag is None:
+        return None
+    return getattr(diag, "primary_failed_gate", None)
+
+
 def require_acceptable_exit_quote_for_execution(valuation: PaperOpenPositionValuationResponse) -> None:
     """Fail-closed gate before any automated or emergency close that must honor fresh two-sided quotes."""
     if valuation.valuation_error:
@@ -137,6 +175,7 @@ def run_strategy_one_paper_execute_once(
     evaluation, mstatus, chain = build_strategy_one_evaluation_bundle(context, market, settings)
     if evaluation.decision == "no_trade":
         notes.append("entry_evaluator_no_trade_candidate")
+        _append_primary_failed_gate_note(notes, _primary_failed_gate_from_evaluation(evaluation))
         return StrategyOneExecuteOnceResponse(
             cycle_action="no_action",
             had_open_position_at_start=False,
@@ -154,6 +193,9 @@ def run_strategy_one_paper_execute_once(
         )
     except PaperTradeError as exc:
         notes.append(f"auto_open_failed:{exc}")
+        _append_primary_failed_gate_note(notes, _primary_failed_gate_from_evaluation(evaluation))
+        if str(exc) == "paper_entry_premium_exceeds_risk_budget":
+            _append_affordability_details_note(notes, getattr(exc, "details", None))
         return StrategyOneExecuteOnceResponse(
             cycle_action="no_action",
             had_open_position_at_start=False,

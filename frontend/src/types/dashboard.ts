@@ -47,6 +47,11 @@ export type DashboardResponse = {
     recent_auto_open_failure_count: number;
     primary_recent_blocker: string | null;
     recent_result_counts: Record<string, number>;
+    recent_failed_gate_counts: Record<string, number>;
+    most_common_recent_failed_gate: string | null;
+    current_near_miss_explanation: string | null;
+    recent_affordability_failure_count: number;
+    latest_affordability_diagnostics: Record<string, string> | null;
   } | null;
   headline_metrics: {
     realized_pnl: number;
@@ -96,6 +101,8 @@ export type DashboardResponse = {
   }>;
   timeseries: {
     equity_or_value: DashboardPoint[];
+    equity_return_pct: DashboardPoint[];
+    cash_over_time: DashboardPoint[];
     realized_pnl_cumulative: DashboardPoint[];
     drawdown: DashboardPoint[] | null;
     is_minimal_viable: boolean;
@@ -115,6 +122,8 @@ export type StrategyDashboardViewModel = {
   cycleSummary: NonNullable<DashboardResponse["cycle_summary"]> | null;
   metrics: DashboardResponse["headline_metrics"];
   equitySeries: DashboardPoint[];
+  equityReturnSeries: DashboardPoint[];
+  cashSeries: DashboardPoint[];
   /** Backend marks MVP / estimated equity curve (sparse early session). */
   equitySeriesIsMinimalViable: boolean;
   openPositions: DashboardResponse["open_positions"];

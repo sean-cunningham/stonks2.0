@@ -154,6 +154,95 @@ export function humanizeCycleDetails(notes: string | null | undefined): string {
   return tokens.map(humanizeCycleNoteToken).join(" · ");
 }
 
+const FAILED_GATES: Record<string, string> = {
+  context_live_ready: "Context live-readiness",
+  market_ready: "Market readiness",
+  chain_ready: "Option-chain readiness",
+  required_metrics_present: "Required metrics",
+  atr_positive: "ATR validation",
+  outside_chop_zone: "Chop filter",
+  vwap_or_geometry_consistent: "VWAP / opening-range geometry",
+  structure_bull_or_bear_detected: "Structure + swing confirmation",
+  contract_available_for_structure_side: "Contract side availability",
+  contract_quality_passed: "Contract quality filter",
+  contract_intraday_dte_passed: "Contract DTE band filter",
+  contract_selected: "Final contract selection",
+};
+
+export function humanizeFailedGate(gate: string | null | undefined): string {
+  if (!gate) return "—";
+  return FAILED_GATES[gate] ?? snakeToTitleCase(gate);
+}
+
+export function summarizeAffordabilityDiagnostics(diag: Record<string, string> | null | undefined): string | null {
+  if (!diag) return null;
+  const attempted = Number(diag.attempted_total_premium_usd ?? "NaN");
+  const maxAff = Number(diag.max_affordable_premium_usd ?? "NaN");
+  const over = Number(diag.premium_over_budget_usd ?? "NaN");
+  if (Number.isNaN(attempted) || Number.isNaN(maxAff) || Number.isNaN(over)) {
+    return "Trade setup found, but premium exceeded the risk budget.";
+  }
+  return `Trade setup found, but premium ${attempted.toFixed(2)} exceeded max affordable ${maxAff.toFixed(2)} by ${over.toFixed(2)}.`;
+}
+
+function fmtUsd(v: number | null): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  return `$${v.toFixed(2)}`;
+}
+
+function fmtPct(v: number | null): string {
+  if (v == null || Number.isNaN(v)) return "—";
+  return `${(v * 100).toFixed(2)}%`;
+}
+
+function readNum(input: string | null | undefined): number | null {
+  if (input == null || input === "") return null;
+  const n = Number(input);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function extractAffordabilityDiagnosticsFromNotes(
+  notes: string | null | undefined
+): Record<string, string> | null {
+  if (!notes?.includes("affordability_diag:")) return null;
+  const token = notes
+    .split("|")
+    .map((t) => t.trim())
+    .find((t) => t.startsWith("affordability_diag:"));
+  if (!token) return null;
+  const body = token.slice("affordability_diag:".length).trim();
+  if (!body) return null;
+  const out: Record<string, string> = {};
+  for (const kv of body.split(";")) {
+    const [kRaw, ...rest] = kv.split("=");
+    const k = (kRaw ?? "").trim();
+    const v = rest.join("=").trim();
+    if (k && v) out[k] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+export function affordabilityDiagnosticRows(
+  diag: Record<string, string> | null | undefined
+): Array<{ label: string; value: string }> {
+  if (!diag) return [];
+  return [
+    { label: "Option", value: diag.attempted_option_symbol ?? "—" },
+    { label: "Side", value: snakeToTitleCase(diag.attempted_side ?? "—") },
+    { label: "Expiration", value: diag.attempted_expiration_date ?? "—" },
+    { label: "Strike", value: diag.attempted_strike ?? "—" },
+    { label: "Ask", value: fmtUsd(readNum(diag.attempted_ask)) },
+    { label: "Total premium", value: fmtUsd(readNum(diag.attempted_total_premium_usd)) },
+    { label: "Risk budget", value: fmtUsd(readNum(diag.risk_budget_usd)) },
+    { label: "Max affordable premium", value: fmtUsd(readNum(diag.max_affordable_premium_usd)) },
+    { label: "Over budget", value: fmtUsd(readNum(diag.premium_over_budget_usd)) },
+    { label: "Account equity used", value: fmtUsd(readNum(diag.account_equity_used)) },
+    { label: "Max risk % used", value: fmtPct(readNum(diag.max_risk_pct_used)) },
+    { label: "Fail-safe stop % used", value: fmtPct(readNum(diag.fail_safe_stop_pct_used)) },
+    { label: "Block reason", value: snakeToTitleCase(diag.affordability_block_reason ?? "unknown") },
+  ];
+}
+
 const REASONS: Record<string, string> = {
   context_live_ready: "Context is ready",
   market_and_chain_ready: "Market and option chain are ready",

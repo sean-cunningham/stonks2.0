@@ -1,9 +1,12 @@
 import type { StrategyDashboardViewModel } from "../../types/dashboard";
 import {
+  affordabilityDiagnosticRows,
   buildNoTradeBecauseLine,
   humanizeDecision,
+  humanizeFailedGate,
   humanizePaperTradeCode,
   humanizeReason,
+  summarizeAffordabilityDiagnostics,
   humanizeBlocker,
 } from "../../utils/dashboardHumanize";
 
@@ -22,6 +25,11 @@ function decisionBadgeClass(decision: string): string {
 export default function SignalBlockerPanel({ signal, cycleSummary }: Props) {
   const failures = cycleSummary?.recent_auto_open_failure_count ?? 0;
   const primaryAutoOpen = cycleSummary?.primary_recent_blocker ?? null;
+  const primaryFailedGate = cycleSummary?.most_common_recent_failed_gate ?? null;
+  const nearMissExplanation = cycleSummary?.current_near_miss_explanation ?? null;
+  const affordabilityDiag = cycleSummary?.latest_affordability_diagnostics ?? null;
+  const affordabilitySummary = summarizeAffordabilityDiagnostics(affordabilityDiag);
+  const affordabilityRows = affordabilityDiagnosticRows(affordabilityDiag);
   const evalBlockers = signal?.current_blockers?.length ? signal.current_blockers : [];
   const showWhyCard =
     failures > 0 || (signal?.current_decision === "no_trade" && evalBlockers.length > 0);
@@ -120,6 +128,49 @@ export default function SignalBlockerPanel({ signal, cycleSummary }: Props) {
           )}
           {signal && signal.current_decision === "no_trade" && evalBlockers.length > 0 && (
             <div className="why-line human-em">{buildNoTradeBecauseLine(evalBlockers)}</div>
+          )}
+          {(cycleSummary?.recent_affordability_failure_count ?? 0) > 0 && (
+            <div className="why-line">
+              <strong>Affordability diagnostics:</strong>{" "}
+              {affordabilitySummary ?? "Premium exceeded the risk budget on recent attempts."}
+              {affordabilityRows.length > 0 && (
+                <dl className="affordability-grid">
+                  {affordabilityRows.map((r) => (
+                    <div key={r.label}>
+                      <dt>{r.label}</dt>
+                      <dd>{r.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              )}
+              {affordabilityDiag && (
+                <details className="notes-raw">
+                  <summary>Raw affordability math</summary>
+                  <pre>{JSON.stringify(affordabilityDiag, null, 2)}</pre>
+                </details>
+              )}
+            </div>
+          )}
+          {(primaryFailedGate ||
+            nearMissExplanation ||
+            Object.keys(cycleSummary?.recent_failed_gate_counts ?? {}).length !== 0) && (
+            <div className="why-line">
+              <strong>Near-miss diagnostics:</strong>
+              {primaryFailedGate && (
+                <div>
+                  Most common recent failed gate: <span className="mono">{humanizeFailedGate(primaryFailedGate)}</span>
+                </div>
+              )}
+              {nearMissExplanation && <div>Current near-miss: {nearMissExplanation}</div>}
+              {cycleSummary && Object.keys(cycleSummary.recent_failed_gate_counts ?? {}).length > 0 && (
+                <div>
+                  Recent failed gate counts:{" "}
+                  {Object.entries(cycleSummary.recent_failed_gate_counts)
+                    .map(([k, v]) => `${humanizeFailedGate(k)}=${v}`)
+                    .join(" · ")}
+                </div>
+              )}
+            </div>
           )}
         </article>
       )}

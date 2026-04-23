@@ -96,6 +96,8 @@ class TimeSeriesPoint(BaseModel):
 class StrategyTimeseries(BaseModel):
     # MVP estimate: closed-trade realized steps + current open snapshot, not full historical MTM.
     equity_or_value: list[TimeSeriesPoint] = Field(default_factory=list)
+    equity_return_pct: list[TimeSeriesPoint] = Field(default_factory=list)
+    cash_over_time: list[TimeSeriesPoint] = Field(default_factory=list)
     realized_pnl_cumulative: list[TimeSeriesPoint] = Field(default_factory=list)
     # Optional; when present it is computed from the same MVP estimated series.
     drawdown: list[TimeSeriesPoint] | None = None
@@ -115,6 +117,11 @@ class StrategyCycleSummary(BaseModel):
     recent_auto_open_failure_count: int = 0
     primary_recent_blocker: str | None = None
     recent_result_counts: dict[str, int] = Field(default_factory=dict)
+    recent_failed_gate_counts: dict[str, int] = Field(default_factory=dict)
+    most_common_recent_failed_gate: str | None = None
+    current_near_miss_explanation: str | None = None
+    recent_affordability_failure_count: int = 0
+    latest_affordability_diagnostics: dict[str, Any] | None = None
 
 
 class StrategyDashboardResponse(BaseModel):
