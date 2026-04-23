@@ -36,6 +36,17 @@ export function humanizeCycleResult(result: string | null | undefined): string {
   return CYCLE_RESULTS[result] ?? snakeToTitleCase(result);
 }
 
+const CYCLE_ACTIONS: Record<string, string> = {
+  opened: "Open position",
+  closed: "Close position",
+  no_action: "None",
+};
+
+export function humanizeCycleAction(action: string | null | undefined): string {
+  if (action == null || action === "") return "None";
+  return CYCLE_ACTIONS[action] ?? snakeToTitleCase(action);
+}
+
 const RUNTIME_SLEEP: Record<string, string> = {
   paused: "Bot is paused",
   outside_rth: "Outside US market hours (weekdays 9:30 AM–4:00 PM Eastern)",
@@ -107,12 +118,40 @@ export function humanizePaperTradeCode(code: string): string {
   return PAPER_CODES[code] ?? `Automatic open was blocked (${snakeToTitleCase(code)}).`;
 }
 
+const CYCLE_NOTE_CODES: Record<string, string> = {
+  entry_evaluator_no_trade_candidate: "No trade setup was found",
+  runtime_entry_disabled: "Entry automation is disabled",
+  runtime_exit_disabled: "Exit automation is disabled",
+  exit_evaluator_did_not_request_close_now: "Exit rules did not request a close",
+  chain_not_acceptable_for_quote: "Option quote data was not acceptable for execution",
+};
+
+function humanizeCycleNoteToken(token: string): string {
+  if (token.startsWith("auto_open_failed:")) {
+    const code = token.split("auto_open_failed:", 2)[1]?.trim();
+    if (!code) return "Automatic open failed.";
+    return humanizePaperTradeCode(code);
+  }
+  if (CYCLE_NOTE_CODES[token]) return CYCLE_NOTE_CODES[token];
+  return snakeToTitleCase(token.replace(/:/g, " "));
+}
+
 /** Pull `auto_open_failed:code` tail from cycle notes and return human text, or null */
 export function humanizeAutoOpenNotes(notes: string | null | undefined): string | null {
   if (!notes?.includes("auto_open_failed:")) return null;
   const part = notes.split("auto_open_failed:", 2)[1]?.split("|", 1)[0]?.trim();
   if (!part) return "Automatic open failed.";
   return humanizePaperTradeCode(part);
+}
+
+export function humanizeCycleDetails(notes: string | null | undefined): string {
+  if (!notes) return "—";
+  const tokens = notes
+    .split("|")
+    .map((t) => t.trim())
+    .filter((t) => t.length > 0);
+  if (!tokens.length) return "—";
+  return tokens.map(humanizeCycleNoteToken).join(" · ");
 }
 
 const REASONS: Record<string, string> = {
