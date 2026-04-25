@@ -45,15 +45,15 @@ def _market_ready() -> MarketStatusResponse:
     )
 
 
-def _chain_for(option_symbol: str, expiration_iso: str) -> ChainLatestResponse:
+def _chain_for(option_symbol: str, expiration_iso: str, *, bid: float = 2.0, ask: float = 2.2) -> ChainLatestResponse:
     c = NearAtmContract(
         option_symbol=option_symbol,
         strike=500.0,
         option_type="call",
         expiration_date=expiration_iso,
-        bid=2.0,
-        ask=2.2,
-        mid=2.1,
+        bid=bid,
+        ask=ask,
+        mid=(bid + ask) / 2.0,
         spread_percent=10.0,
         delta=0.5,
         is_call=True,
@@ -149,7 +149,7 @@ class PaperTradeIsolationTests(unittest.TestCase):
             row_two = strategy_two.open_position(
                 db,
                 evaluation=_eval_for("SPY  260425C00501000", expiration_iso_strategy_two),
-                chain=_chain_for("SPY  260425C00501000", expiration_iso_strategy_two),
+                chain=_chain_for("SPY  260425C00501000", expiration_iso_strategy_two, bid=0.45, ask=0.50),
                 market_status=_market_ready(),
                 settings=self.settings,
             )

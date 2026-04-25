@@ -20,10 +20,17 @@ def build_strategy_two_evaluation_bundle(
 ) -> tuple[StrategyOneEvaluationResponse, MarketStatusResponse, ChainLatestResponse]:
     st = context.get_status()
     summary = context.get_summary()
+    bars_1m = context.get_bars_1m()
     resolution = market.resolve_spy_market_for_evaluation()
     mstatus = resolution.final_status
     chain = market.get_latest_chain()
-    inp = StrategyTwoEvalInput.from_api(status=st, summary=summary, market=mstatus, chain=chain)
+    inp = StrategyTwoEvalInput.from_api(
+        status=st,
+        summary=summary,
+        market=mstatus,
+        chain=chain,
+        bars_1m=bars_1m.bars,
+    )
     trace = StrategyOneMarketEvaluationTrace(
         market_status_source=resolution.market_status_source,
         auto_refresh_attempted=resolution.auto_refresh_attempted,

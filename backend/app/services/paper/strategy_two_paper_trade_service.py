@@ -126,7 +126,7 @@ class StrategyTwoPaperTradeService:
             symbol=evaluation.symbol,
             option_symbol=cand.option_symbol,
             side="long",
-            quantity=1,
+            quantity=int(sizing_pol.quantity),
             entry_time=now,
             entry_price=float(quote.ask),
             exit_time=None,

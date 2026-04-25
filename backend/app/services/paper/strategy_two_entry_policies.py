@@ -12,8 +12,11 @@ from app.services.paper.contract_constants import OPTION_CONTRACT_MULTIPLIER
 
 _ET = ZoneInfo("America/New_York")
 
-PREMIUM_FAIL_SAFE_FRACTION = 0.35
-MAX_RISK_FRACTION = 0.05
+PROFIT_TARGET_PCT = 0.20
+HARD_STOP_PCT = 0.15
+SPEED_FAILURE_SECONDS = 90
+MAX_HOLD_SECONDS = 300
+MAX_POSITION_COST_USD = 150.0
 
 
 class EntryPolicyRejected(Exception):
@@ -35,6 +38,9 @@ class StrategyTwoExitPolicyV1:
     calendar_dte_at_entry: int
     expiry_band: str
     premium_fail_safe_stop_pct: float
+    profit_target_pct: float
+    speed_failure_seconds: int
+    max_hold_seconds: int
     hard_flat_time_et: str
     hard_flat_zone: str
 
@@ -45,6 +51,9 @@ class StrategyTwoExitPolicyV1:
             "calendar_dte_at_entry": self.calendar_dte_at_entry,
             "expiry_band": self.expiry_band,
             "premium_fail_safe_stop_pct": self.premium_fail_safe_stop_pct,
+            "profit_target_pct": self.profit_target_pct,
+            "speed_failure_seconds": self.speed_failure_seconds,
+            "max_hold_seconds": self.max_hold_seconds,
             "hard_flat_time_et": self.hard_flat_time_et,
             "hard_flat_zone": self.hard_flat_zone,
         }
@@ -55,11 +64,8 @@ class StrategyTwoSizingPolicyV1:
     policy_version: str
     sizing_profile: str
     account_equity_usd: float
-    max_risk_pct: float
     quantity: int
-    risk_budget_usd: float
-    fail_safe_stop_pct: float
-    max_affordable_premium_usd: float
+    max_position_cost_usd: float
     entry_ask_per_share: float
     entry_total_premium_usd: float
 
@@ -68,11 +74,8 @@ class StrategyTwoSizingPolicyV1:
             "policy_version": self.policy_version,
             "sizing_profile": self.sizing_profile,
             "account_equity_usd": self.account_equity_usd,
-            "max_risk_pct": self.max_risk_pct,
             "quantity": self.quantity,
-            "risk_budget_usd": self.risk_budget_usd,
-            "fail_safe_stop_pct": self.fail_safe_stop_pct,
-            "max_affordable_premium_usd": self.max_affordable_premium_usd,
+            "max_position_cost_usd": self.max_position_cost_usd,
             "entry_ask_per_share": self.entry_ask_per_share,
             "entry_total_premium_usd": self.entry_total_premium_usd,
         }
@@ -81,33 +84,27 @@ class StrategyTwoSizingPolicyV1:
 def build_sizing_policy_v1(*, account_equity_usd: float, entry_ask_per_share: float, quantity: int) -> StrategyTwoSizingPolicyV1:
     if quantity <= 0:
         raise EntryPolicyRejected("paper_entry_quantity_invalid")
-    risk_budget = float(account_equity_usd) * MAX_RISK_FRACTION
-    total_premium = float(entry_ask_per_share) * OPTION_CONTRACT_MULTIPLIER * int(quantity)
-    max_affordable = risk_budget / PREMIUM_FAIL_SAFE_FRACTION
-    if total_premium > max_affordable:
+    cost_per_contract = float(entry_ask_per_share) * OPTION_CONTRACT_MULTIPLIER
+    if cost_per_contract > MAX_POSITION_COST_USD:
         raise EntryPolicyRejected(
-            "paper_entry_premium_exceeds_risk_budget",
+            "paper_entry_exceeds_max_position_cost",
             details={
                 "attempted_ask": float(entry_ask_per_share),
-                "attempted_total_premium_usd": total_premium,
-                "account_equity_used": float(account_equity_usd),
-                "max_risk_pct_used": MAX_RISK_FRACTION,
-                "fail_safe_stop_pct_used": PREMIUM_FAIL_SAFE_FRACTION,
-                "risk_budget_usd": risk_budget,
-                "max_affordable_premium_usd": max_affordable,
-                "premium_over_budget_usd": total_premium - max_affordable,
-                "affordability_block_reason": "premium_exceeds_risk_budget",
+                "max_position_cost_usd": MAX_POSITION_COST_USD,
+                "contract_cost_usd": cost_per_contract,
+                "affordability_block_reason": "single_contract_over_max_position_cost",
             },
         )
+    sized_quantity = int(MAX_POSITION_COST_USD // cost_per_contract)
+    if sized_quantity < 1:
+        raise EntryPolicyRejected("paper_entry_quantity_invalid")
+    total_premium = float(entry_ask_per_share) * OPTION_CONTRACT_MULTIPLIER * int(sized_quantity)
     return StrategyTwoSizingPolicyV1(
         policy_version="strategy_2_sizing_v1",
         sizing_profile="vol_sniper_small_account",
         account_equity_usd=float(account_equity_usd),
-        max_risk_pct=MAX_RISK_FRACTION,
-        quantity=int(quantity),
-        risk_budget_usd=risk_budget,
-        fail_safe_stop_pct=PREMIUM_FAIL_SAFE_FRACTION,
-        max_affordable_premium_usd=max_affordable,
+        quantity=int(sized_quantity),
+        max_position_cost_usd=MAX_POSITION_COST_USD,
         entry_ask_per_share=float(entry_ask_per_share),
         entry_total_premium_usd=total_premium,
     )
@@ -132,8 +129,11 @@ def assign_exit_and_sizing_policies_v1(
         trade_horizon_class="intraday_vol_sniper",
         calendar_dte_at_entry=dte,
         expiry_band="0_dte",
-        premium_fail_safe_stop_pct=PREMIUM_FAIL_SAFE_FRACTION,
-        hard_flat_time_et="15:58",
+        premium_fail_safe_stop_pct=HARD_STOP_PCT,
+        profit_target_pct=PROFIT_TARGET_PCT,
+        speed_failure_seconds=SPEED_FAILURE_SECONDS,
+        max_hold_seconds=MAX_HOLD_SECONDS,
+        hard_flat_time_et="15:45",
         hard_flat_zone="America/New_York",
     )
     sizing = build_sizing_policy_v1(

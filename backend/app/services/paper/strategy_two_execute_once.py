@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,12 @@ from app.services.paper.strategy_two_paper_trade_service import StrategyTwoPaper
 
 AUTO_EXIT_REASON = "strategy_2_auto_exit_close_now"
 EMERGENCY_EXIT_REASON = "strategy_2_emergency_manual_override"
+_ET = ZoneInfo("America/New_York")
+_MAX_TRADES_PER_DAY = 3
+_MAX_DAILY_LOSS_USD = 150.0
+_MAX_CONSECUTIVE_LOSSES = 3
+_COOLDOWN_AFTER_ANY_TRADE_MIN = 10
+_COOLDOWN_AFTER_LOSS_MIN = 20
 
 
 def _append_affordability_details_note(notes: list[str], details: dict | None) -> None:
@@ -44,6 +51,49 @@ def _append_affordability_details_note(notes: list[str], details: dict | None) -
     parts = [f"{k}={details[k]}" for k in keys if k in details]
     if parts:
         notes.append("affordability_diag:" + ";".join(parts))
+
+
+def _entry_limits_block_reason(
+    *,
+    now_utc: datetime,
+    repo: PaperTradeRepository,
+    strategy_id: str,
+) -> str | None:
+    closed_rows = repo.list_closed_chronological(strategy_id=strategy_id, limit=2000)
+    open_rows = repo.list_open(strategy_id=strategy_id)
+    today_et = now_utc.astimezone(_ET).date()
+
+    entries_today = [r for r in closed_rows if r.entry_time and r.entry_time.astimezone(_ET).date() == today_et]
+    entries_today.extend([r for r in open_rows if r.entry_time and r.entry_time.astimezone(_ET).date() == today_et])
+    if len(entries_today) >= _MAX_TRADES_PER_DAY:
+        return "risk_limit_max_trades_per_day_reached"
+
+    daily_realized = sum(float(r.realized_pnl or 0.0) for r in closed_rows if r.exit_time and r.exit_time.astimezone(_ET).date() == today_et)
+    if daily_realized <= -_MAX_DAILY_LOSS_USD:
+        return "risk_limit_max_daily_loss_reached"
+
+    consecutive_losses = 0
+    for row in reversed(closed_rows):
+        pnl = float(row.realized_pnl or 0.0)
+        if pnl < 0:
+            consecutive_losses += 1
+            if consecutive_losses >= _MAX_CONSECUTIVE_LOSSES:
+                return "risk_limit_max_consecutive_losses_reached"
+        else:
+            break
+
+    latest_closed_exit = max((r.exit_time for r in closed_rows if r.exit_time is not None), default=None)
+    latest_open_entry = max((r.entry_time for r in open_rows if r.entry_time is not None), default=None)
+    latest_trade_time = max([t for t in [latest_closed_exit, latest_open_entry] if t is not None], default=None)
+    if latest_trade_time is not None:
+        if (now_utc - latest_trade_time).total_seconds() < timedelta(minutes=_COOLDOWN_AFTER_ANY_TRADE_MIN).total_seconds():
+            return "cooldown_after_any_trade_active"
+
+    latest_loss_exit = max((r.exit_time for r in closed_rows if r.exit_time and float(r.realized_pnl or 0.0) < 0), default=None)
+    if latest_loss_exit is not None:
+        if (now_utc - latest_loss_exit).total_seconds() < timedelta(minutes=_COOLDOWN_AFTER_LOSS_MIN).total_seconds():
+            return "cooldown_after_loss_active"
+    return None
 
 
 def run_strategy_two_paper_exit_once(
@@ -170,6 +220,15 @@ def run_strategy_two_paper_entry_once(
             notes=notes,
             evaluation_timestamp=clock,
         )
+    entry_limits_blocked = _entry_limits_block_reason(now_utc=clock, repo=repo, strategy_id=svc.STRATEGY_ID)
+    if entry_limits_blocked:
+        notes.append(entry_limits_blocked)
+        return StrategyTwoExecuteOnceResponse(
+            cycle_action="no_action",
+            had_open_position_at_start=False,
+            notes=notes,
+            evaluation_timestamp=clock,
+        )
 
     evaluation, mstatus, chain = build_strategy_two_evaluation_bundle(context, market, settings)
     if evaluation.decision == "no_trade":
@@ -191,7 +250,7 @@ def run_strategy_two_paper_entry_once(
         )
     except PaperTradeError as exc:
         notes.append(f"auto_open_failed:{exc}")
-        if str(exc) == "paper_entry_premium_exceeds_risk_budget":
+        if str(exc) == "paper_entry_exceeds_max_position_cost":
             _append_affordability_details_note(notes, getattr(exc, "details", None))
         return StrategyTwoExecuteOnceResponse(
             cycle_action="no_action",

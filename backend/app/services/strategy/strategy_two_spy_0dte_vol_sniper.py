@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
+from statistics import mean
 from zoneinfo import ZoneInfo
 
+from app.schemas.bars import BarRow
 from app.schemas.context import ContextStatusResponse, ContextSummaryResponse
 from app.schemas.market import ChainLatestResponse, MarketStatusResponse, NearAtmContract
 from app.schemas.strategy import (
@@ -16,6 +18,19 @@ from app.schemas.strategy import (
 
 STRATEGY2_ID = "strategy_2_spy_0dte_vol_sniper"
 _ET = ZoneInfo("America/New_York")
+_ENTRY_WINDOWS_ET = (
+    (time(9, 45), time(11, 30)),
+    (time(13, 45), time(15, 45)),
+)
+_PROXIMITY_PCT = 0.0008
+_PROXIMITY_ATR_MULT = 0.20
+_MIN_ABS_1M_RETURN_PCT = 0.0008
+_MIN_1M_RANGE_ATR_MULT = 0.45
+_MIN_1M_VOLUME_MULT = 1.75
+_MIN_OPTION_MID = 0.20
+_MAX_OPTION_MID = 3.00
+_MAX_SPREAD_DOLLARS = 0.05
+_MAX_SPREAD_PERCENT = 10.0
 
 
 @dataclass(frozen=True)
@@ -24,6 +39,7 @@ class StrategyTwoEvalInput:
     summary: ContextSummaryResponse
     market: MarketStatusResponse
     chain: ChainLatestResponse
+    bars_1m: list[BarRow]
 
     @classmethod
     def from_api(
@@ -33,8 +49,9 @@ class StrategyTwoEvalInput:
         summary: ContextSummaryResponse,
         market: MarketStatusResponse,
         chain: ChainLatestResponse,
+        bars_1m: list[BarRow],
     ) -> "StrategyTwoEvalInput":
-        return cls(status=status, summary=summary, market=market, chain=chain)
+        return cls(status=status, summary=summary, market=market, chain=chain, bars_1m=list(bars_1m))
 
 
 def _snapshot(inp: StrategyTwoEvalInput) -> StrategyOneContextSnapshot:
@@ -69,6 +86,90 @@ def _is_0dte(expiration_date: str | None, now_utc: datetime) -> bool:
     return expiration_date == now_utc.astimezone(_ET).date().isoformat()
 
 
+def _is_within_entry_window(now_utc: datetime) -> bool:
+    now_et = now_utc.astimezone(_ET).time()
+    for start, end in _ENTRY_WINDOWS_ET:
+        if start <= now_et <= end:
+            return True
+    return False
+
+
+def _current_1m_signal_metrics(inp: StrategyTwoEvalInput) -> tuple[float | None, float | None, float | None]:
+    bars = inp.bars_1m
+    if len(bars) < 21:
+        return None, None, None
+    latest = bars[-1]
+    if latest.open is None or latest.close is None or latest.high is None or latest.low is None:
+        return None, None, None
+    if latest.open <= 0:
+        return None, None, None
+    abs_return_pct = abs((float(latest.close) - float(latest.open)) / float(latest.open))
+    avg_volume_20 = mean(float(b.volume or 0.0) for b in bars[-21:-1])
+    volume_mult = (float(latest.volume or 0.0) / avg_volume_20) if avg_volume_20 > 0 else None
+    one_min_range = float(latest.high) - float(latest.low)
+    atr = float(inp.summary.latest_5m_atr or 0.0)
+    range_atr_ratio = (one_min_range / atr) if atr > 0 else None
+    return abs_return_pct, range_atr_ratio, volume_mult
+
+
+def _trigger_levels(inp: StrategyTwoEvalInput) -> dict[str, float]:
+    out: dict[str, float] = {}
+    fields = {
+        "opening_range_high": inp.summary.opening_range_high,
+        "opening_range_low": inp.summary.opening_range_low,
+        "session_vwap": inp.summary.session_vwap,
+        "recent_swing_high": inp.summary.recent_swing_high,
+        "recent_swing_low": inp.summary.recent_swing_low,
+    }
+    for key, value in fields.items():
+        if value is not None:
+            out[key] = float(value)
+    # Previous day levels if available from 1m bars.
+    if inp.bars_1m:
+        now_et_day = datetime.now(timezone.utc).astimezone(_ET).date()
+        prev_day_high = None
+        prev_day_low = None
+        for b in inp.bars_1m:
+            b_day = b.bar_time.astimezone(_ET).date()
+            if b_day >= now_et_day:
+                continue
+            prev_day_high = float(b.high) if prev_day_high is None else max(prev_day_high, float(b.high))
+            prev_day_low = float(b.low) if prev_day_low is None else min(prev_day_low, float(b.low))
+        if prev_day_high is not None:
+            out["previous_day_high"] = prev_day_high
+        if prev_day_low is not None:
+            out["previous_day_low"] = prev_day_low
+    return out
+
+
+def _choose_setup(
+    *,
+    latest_price: float,
+    one_min_return_signed: float,
+    trigger_name: str,
+) -> str:
+    bullish = one_min_return_signed >= _MIN_ABS_1M_RETURN_PCT
+    bearish = one_min_return_signed <= -_MIN_ABS_1M_RETURN_PCT
+    upper_triggers = {"opening_range_high", "recent_swing_high", "previous_day_high"}
+    lower_triggers = {"opening_range_low", "recent_swing_low", "previous_day_low"}
+    if trigger_name in upper_triggers:
+        if bullish:
+            return "call_breakout"
+        if bearish:
+            return "put_rejection"
+    if trigger_name in lower_triggers:
+        if bearish:
+            return "put_breakdown"
+        if bullish:
+            return "call_rejection"
+    if trigger_name == "session_vwap":
+        if bullish and latest_price >= 0:
+            return "call_breakout"
+        if bearish:
+            return "put_breakdown"
+    return "none"
+
+
 def _pick_0dte_contract(
     *,
     contracts: list[NearAtmContract],
@@ -87,6 +188,16 @@ def _pick_0dte_contract(
         if c.ask is None or c.ask <= 0:
             continue
         if c.bid is None or c.bid <= 0:
+            continue
+        mid = float(c.mid) if c.mid is not None else (float(c.bid) + float(c.ask)) / 2.0
+        if mid < _MIN_OPTION_MID or mid > _MAX_OPTION_MID:
+            continue
+        spread = float(c.ask) - float(c.bid)
+        spread_percent = c.spread_percent
+        if spread_percent is None and mid > 0:
+            spread_percent = (spread / mid) * 100.0
+        spread_ok = spread <= _MAX_SPREAD_DOLLARS or (spread_percent is not None and spread_percent <= _MAX_SPREAD_PERCENT)
+        if not spread_ok:
             continue
         eligible.append(c)
     if not eligible:
@@ -142,33 +253,139 @@ def evaluate_strategy_two_spy_0dte_vol_sniper(inp: StrategyTwoEvalInput) -> Stra
             "Market status is not ready for execution.",
         )
 
+    gate_pass["entry_window_open"] = _is_within_entry_window(now)
+    if not gate_pass["entry_window_open"]:
+        primary_failed_gate = "entry_window_open"
+        return fail(
+            "entry_window_open",
+            "outside_strategy_2_entry_window",
+            "Entries are only allowed 09:45-11:30 ET and 13:45-15:45 ET.",
+        )
+
     latest = inp.summary.latest_price
     vwap = inp.summary.session_vwap
     atr = inp.summary.latest_5m_atr
-    gate_pass["required_metrics_present"] = latest is not None and vwap is not None and atr is not None and atr > 0
+    gate_pass["required_metrics_present"] = (
+        latest is not None
+        and vwap is not None
+        and atr is not None
+        and atr > 0
+        and inp.summary.opening_range_high is not None
+        and inp.summary.opening_range_low is not None
+        and inp.summary.recent_swing_high is not None
+        and inp.summary.recent_swing_low is not None
+    )
     if not gate_pass["required_metrics_present"]:
         primary_failed_gate = "required_metrics_present"
         return fail(
             "required_metrics_present",
-            "missing_metrics:price_vwap_or_atr",
-            "Required metrics (price, VWAP, ATR) are missing for sniper evaluation.",
+            "missing_metrics:price_levels_or_atr",
+            "Required metrics (price, levels, ATR) are missing for sniper evaluation.",
         )
 
     assert latest is not None and vwap is not None and atr is not None
-    speed_ratio = abs(float(latest) - float(vwap)) / float(atr)
-    near_miss["speed_ratio"] = speed_ratio
-    gate_pass["volatility_impulse"] = speed_ratio >= 0.35
-    if not gate_pass["volatility_impulse"]:
-        primary_failed_gate = "volatility_impulse"
+    trigger_levels = _trigger_levels(inp)
+    gate_pass["trigger_levels_available"] = len(trigger_levels) > 0
+    if not gate_pass["trigger_levels_available"]:
+        primary_failed_gate = "trigger_levels_available"
         return fail(
-            "volatility_impulse",
-            "no_volatility_impulse",
-            "Price speed versus ATR is below sniper threshold.",
+            "trigger_levels_available",
+            "missing_trigger_levels",
+            "No trigger levels are available for Strategy 2.",
         )
-    reasons.append("volatility_impulse_detected")
 
-    side = "call" if latest > vwap else "put"
-    reasons.append("price_above_vwap" if side == "call" else "price_below_vwap")
+    proximity_band = max(float(latest) * _PROXIMITY_PCT, _PROXIMITY_ATR_MULT * float(atr))
+    near_miss["proximity_band"] = proximity_band
+    nearest_trigger_name = None
+    nearest_trigger_level = None
+    nearest_trigger_dist = None
+    for name, level in trigger_levels.items():
+        dist = abs(float(latest) - float(level))
+        if nearest_trigger_dist is None or dist < nearest_trigger_dist:
+            nearest_trigger_name = name
+            nearest_trigger_level = level
+            nearest_trigger_dist = dist
+    near_miss["nearest_trigger_name"] = nearest_trigger_name
+    near_miss["nearest_trigger_level"] = nearest_trigger_level
+    near_miss["nearest_trigger_distance"] = nearest_trigger_dist
+    gate_pass["near_trigger_level"] = nearest_trigger_dist is not None and nearest_trigger_dist <= proximity_band
+    if not gate_pass["near_trigger_level"]:
+        primary_failed_gate = "near_trigger_level"
+        return fail(
+            "near_trigger_level",
+            "not_near_any_trigger_level",
+            "Price is not inside the Strategy 2 trigger proximity band.",
+        )
+
+    one_min_metrics = _current_1m_signal_metrics(inp)
+    if one_min_metrics[0] is None or one_min_metrics[1] is None or one_min_metrics[2] is None:
+        primary_failed_gate = "one_min_signal_metrics_available"
+        return fail(
+            "one_min_signal_metrics_available",
+            "missing_one_min_signal_metrics",
+            "Recent 1-minute bars are insufficient for speed/range/volume checks.",
+        )
+
+    current_abs_1m_return, current_1m_range_atr_ratio, current_1m_volume_mult = one_min_metrics
+    latest_bar = inp.bars_1m[-1]
+    one_min_signed_return = (float(latest_bar.close) - float(latest_bar.open)) / float(latest_bar.open)
+    near_miss["current_1m_return_abs_pct"] = current_abs_1m_return
+    near_miss["current_1m_range_atr_ratio"] = current_1m_range_atr_ratio
+    near_miss["current_1m_volume_multiple"] = current_1m_volume_mult
+
+    gate_pass["speed_return_confirmed"] = current_abs_1m_return >= _MIN_ABS_1M_RETURN_PCT
+    if not gate_pass["speed_return_confirmed"]:
+        primary_failed_gate = "speed_return_confirmed"
+        return fail(
+            "speed_return_confirmed",
+            "one_min_return_below_threshold",
+            "Absolute 1-minute return did not meet Strategy 2 speed threshold.",
+        )
+
+    gate_pass["speed_range_confirmed"] = current_1m_range_atr_ratio >= _MIN_1M_RANGE_ATR_MULT
+    if not gate_pass["speed_range_confirmed"]:
+        primary_failed_gate = "speed_range_confirmed"
+        return fail(
+            "speed_range_confirmed",
+            "one_min_range_below_threshold",
+            "Current 1-minute range did not meet Strategy 2 ATR-based speed threshold.",
+        )
+
+    gate_pass["volume_confirmed"] = current_1m_volume_mult >= _MIN_1M_VOLUME_MULT
+    if not gate_pass["volume_confirmed"]:
+        primary_failed_gate = "volume_confirmed"
+        return fail(
+            "volume_confirmed",
+            "one_min_volume_below_threshold",
+            "Current 1-minute volume did not meet Strategy 2 confirmation threshold.",
+        )
+
+    assert nearest_trigger_name is not None
+    setup_type = _choose_setup(
+        latest_price=float(latest),
+        one_min_return_signed=one_min_signed_return,
+        trigger_name=nearest_trigger_name,
+    )
+    near_miss["setup_type"] = setup_type
+    gate_pass["setup_type_detected"] = setup_type != "none"
+    if setup_type == "none":
+        primary_failed_gate = "setup_type_detected"
+        return fail(
+            "setup_type_detected",
+            "setup_type_none",
+            "No Strategy 2 setup type matched the current trigger interaction.",
+        )
+    side = "call" if setup_type.startswith("call_") else "put"
+    reasons.extend(
+        [
+            f"setup_type:{setup_type}",
+            f"trigger_level:{nearest_trigger_name}",
+            f"proximity_band:{proximity_band:.4f}",
+            f"one_min_return_abs_pct:{current_abs_1m_return:.6f}",
+            f"one_min_range_atr_ratio:{current_1m_range_atr_ratio:.6f}",
+            f"one_min_volume_multiple:{current_1m_volume_mult:.6f}",
+        ]
+    )
 
     cand, eligible_count = _pick_0dte_contract(
         contracts=inp.chain.near_atm_contracts,
