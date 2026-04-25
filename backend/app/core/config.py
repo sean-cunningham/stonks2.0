@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     PAPER_STRATEGY1_ACCOUNT_EQUITY_USD: float = 5000.0
     STRATEGY1_PAPER_RUNTIME_ENABLED: bool = False
     STRATEGY1_PAPER_EXECUTE_OFFSET_SECONDS: int = 4
+    # Paper Strategy 2 — 0DTE vol sniper profile with independent runtime cadences.
+    PAPER_STRATEGY2_ACCOUNT_EQUITY_USD: float = 5000.0
+    STRATEGY2_PAPER_RUNTIME_ENABLED: bool = False
+    STRATEGY2_PAPER_ENTRY_INTERVAL_SECONDS: int = 5
+    STRATEGY2_PAPER_EXIT_INTERVAL_SECONDS: int = 2
 
     # Comma-separated browser origins allowed for CORS (local Vite dev server, etc.).
     CORS_ALLOW_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173"

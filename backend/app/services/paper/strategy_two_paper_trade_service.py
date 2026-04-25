@@ -1,4 +1,4 @@
-"""Deterministic paper position open/close for Strategy 1 (no broker, no fake mids)."""
+"""Deterministic paper position open/close for Strategy 2 (0DTE sniper)."""
 
 from __future__ import annotations
 
@@ -13,30 +13,17 @@ from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.schemas.market import ChainLatestResponse, MarketStatusResponse, NearAtmContract
 from app.schemas.strategy import StrategyOneEvaluationResponse
 from app.services.paper.contract_constants import OPTION_CONTRACT_MULTIPLIER
-from app.services.paper.strategy_one_entry_policies import (
+from app.services.paper.paper_trade_service import (
+    PaperTradeError,
+    _chain_age_seconds,
+    _find_contract,
+    _utc_iso_floor_second,
+)
+from app.services.paper.strategy_two_entry_policies import (
     EntryPolicyRejected,
     assign_exit_and_sizing_policies_v1,
 )
-
-
-class PaperTradeError(Exception):
-    """Fail-closed paper action (caller maps to HTTP 400)."""
-
-    def __init__(self, code: str, *, details: dict | None = None) -> None:
-        super().__init__(code)
-        self.code = code
-        self.details = details or {}
-
-
-def _chain_age_seconds(chain: ChainLatestResponse) -> float | None:
-    if chain.snapshot_timestamp is None:
-        return None
-    ts = (
-        chain.snapshot_timestamp
-        if chain.snapshot_timestamp.tzinfo
-        else chain.snapshot_timestamp.replace(tzinfo=timezone.utc)
-    )
-    return max((datetime.now(timezone.utc) - ts).total_seconds(), 0.0)
+from app.services.strategy.strategy_two_spy_0dte_vol_sniper import STRATEGY2_ID
 
 
 def _validate_chain_for_paper_quote(chain: ChainLatestResponse, settings: Settings) -> None:
@@ -49,22 +36,6 @@ def _validate_chain_for_paper_quote(chain: ChainLatestResponse, settings: Settin
         raise PaperTradeError("option_chain_quote_stale")
 
 
-def _find_contract(chain: ChainLatestResponse, option_symbol: str) -> NearAtmContract:
-    for c in chain.near_atm_contracts:
-        if c.option_symbol == option_symbol:
-            return c
-    raise PaperTradeError("option_contract_not_in_chain_snapshot")
-
-
-def _utc_iso_floor_second(dt: datetime) -> str:
-    """UTC ISO-8601 with microsecond stripped (deterministic dedupe bucket)."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt = dt.astimezone(timezone.utc)
-    return dt.replace(microsecond=0).isoformat()
-
-
 def build_entry_evaluation_fingerprint(
     *,
     strategy_id: str,
@@ -75,11 +46,6 @@ def build_entry_evaluation_fingerprint(
     evaluation_timestamp: datetime,
     chain_snapshot_timestamp: datetime,
 ) -> str:
-    """Audit/replay fingerprint (strategy + contract + side + decision + UTC second buckets).
-
-    Duplicate-open prevention uses ``has_open_position_for_contract`` (any open row for the
-    same strategy/option/side), not this string.
-    """
     return "|".join(
         [
             strategy_id,
@@ -93,19 +59,8 @@ def build_entry_evaluation_fingerprint(
     )
 
 
-class PaperTradeService:
-    """Single-contract SPY paper positions for Strategy 1."""
-
-    STRATEGY_ID = "strategy_1_spy"
-
-    def __init__(
-        self,
-        *,
-        strategy_id: str | None = None,
-        account_equity_usd: float | None = None,
-    ) -> None:
-        self.strategy_id = strategy_id or self.STRATEGY_ID
-        self.account_equity_usd = account_equity_usd
+class StrategyTwoPaperTradeService:
+    STRATEGY_ID = STRATEGY2_ID
 
     def open_position(
         self,
@@ -125,7 +80,7 @@ class PaperTradeService:
             raise PaperTradeError("missing_contract_candidate")
 
         _validate_chain_for_paper_quote(chain, settings)
-        quote = _find_contract(chain, cand.option_symbol)
+        quote: NearAtmContract = _find_contract(chain, cand.option_symbol)
         if quote.ask is None or float(quote.ask) <= 0:
             raise PaperTradeError("option_ask_missing_for_entry")
         if quote.bid is None or float(quote.bid) <= 0:
@@ -134,8 +89,31 @@ class PaperTradeService:
         chain_ts = chain.snapshot_timestamp
         if chain_ts is None:
             raise PaperTradeError("option_chain_timestamp_missing")
+
+        repo = PaperTradeRepository(db)
+        if repo.has_open_position_for_contract(strategy_id=self.STRATEGY_ID, option_symbol=cand.option_symbol, side="long"):
+            raise PaperTradeError("duplicate_open_position")
+
+        now = repo.utc_now()
+        try:
+            exit_pol, sizing_pol = assign_exit_and_sizing_policies_v1(
+                evaluation=evaluation,
+                contract=cand,
+                entry_ask_per_share=float(quote.ask),
+                quantity=1,
+                account_equity_usd=float(settings.PAPER_STRATEGY2_ACCOUNT_EQUITY_USD),
+                entry_clock_utc=now,
+            )
+        except EntryPolicyRejected as exc:
+            details = dict(exc.details or {})
+            details.setdefault("attempted_option_symbol", cand.option_symbol)
+            details.setdefault("attempted_side", "long")
+            details.setdefault("attempted_expiration_date", cand.expiration_date)
+            details.setdefault("attempted_strike", cand.strike)
+            raise PaperTradeError(exc.code, details=details) from exc
+
         fingerprint = build_entry_evaluation_fingerprint(
-            strategy_id=self.strategy_id,
+            strategy_id=self.STRATEGY_ID,
             symbol=evaluation.symbol,
             option_symbol=cand.option_symbol,
             side="long",
@@ -143,36 +121,8 @@ class PaperTradeService:
             evaluation_timestamp=evaluation.evaluation_timestamp,
             chain_snapshot_timestamp=chain_ts,
         )
-
-        repo = PaperTradeRepository(db)
-        if repo.has_open_position_for_contract(
-            strategy_id=self.strategy_id,
-            option_symbol=cand.option_symbol,
-            side="long",
-        ):
-            raise PaperTradeError("duplicate_open_position")
-
-        now = repo.utc_now()
-        account_equity_usd = (
-            float(self.account_equity_usd)
-            if self.account_equity_usd is not None
-            else float(settings.PAPER_STRATEGY1_ACCOUNT_EQUITY_USD)
-        )
-        try:
-            exit_pol, sizing_pol = assign_exit_and_sizing_policies_v1(
-                evaluation=evaluation,
-                contract=cand,
-                entry_ask_per_share=float(quote.ask),
-                quantity=1,
-                account_equity_usd=account_equity_usd,
-                entry_clock_utc=now,
-            )
-        except EntryPolicyRejected as exc:
-            raise PaperTradeError(exc.code, details=exc.details) from exc
-
-        snap = evaluation.model_dump(mode="json")
         row = PaperTrade(
-            strategy_id=self.strategy_id,
+            strategy_id=self.STRATEGY_ID,
             symbol=evaluation.symbol,
             option_symbol=cand.option_symbol,
             side="long",
@@ -184,13 +134,13 @@ class PaperTradeService:
             realized_pnl=None,
             status="open",
             entry_decision=evaluation.decision,
-            evaluation_snapshot_json=snap,
+            evaluation_snapshot_json=evaluation.model_dump(mode="json"),
             entry_reference_basis="option_ask",
             exit_reference_basis=None,
             exit_reason=None,
             entry_evaluation_fingerprint=fingerprint,
-            exit_policy=exit_pol.model_dump(mode="json"),
-            sizing_policy=sizing_pol.model_dump(mode="json"),
+            exit_policy=exit_pol.as_dict(),
+            sizing_policy=sizing_pol.as_dict(),
         )
         try:
             row = repo.create_trade(row)
@@ -205,15 +155,7 @@ class PaperTradeService:
                     "entry_reference_basis": "option_ask",
                     "entry_price_per_share": row.entry_price,
                     "entry_evaluation_fingerprint": fingerprint,
-                    "exit_policy_version": exit_pol.policy_version,
-                    "trade_horizon_class": exit_pol.trade_horizon_class,
-                    "sizing_profile": sizing_pol.sizing_profile,
-                    "risk_budget_usd": sizing_pol.risk_budget_usd,
-                    "max_affordable_premium_usd": sizing_pol.max_affordable_premium_usd,
-                    "chain_snapshot_time": chain.snapshot_timestamp.isoformat()
-                    if chain.snapshot_timestamp
-                    else None,
-                    "evaluation_timestamp": evaluation.evaluation_timestamp.isoformat(),
+                    "strategy_id": self.STRATEGY_ID,
                 },
             )
         )
@@ -231,7 +173,6 @@ class PaperTradeService:
     ) -> PaperTrade:
         if not exit_reason or not exit_reason.strip():
             raise PaperTradeError("exit_reason_required")
-        exit_reason = exit_reason.strip()
         if not market_status.market_ready:
             raise PaperTradeError("market_not_ready_for_paper_exit")
 
@@ -239,7 +180,7 @@ class PaperTradeService:
         row = repo.get_trade(paper_trade_id)
         if row is None:
             raise PaperTradeError("paper_trade_not_found")
-        if row.strategy_id != self.strategy_id:
+        if row.strategy_id != self.STRATEGY_ID:
             raise PaperTradeError("paper_trade_strategy_mismatch")
         if row.status != "open":
             raise PaperTradeError("paper_trade_not_open")
@@ -252,15 +193,13 @@ class PaperTradeService:
         now = repo.utc_now()
         exit_bid = float(quote.bid)
         realized = (exit_bid - float(row.entry_price)) * OPTION_CONTRACT_MULTIPLIER * int(row.quantity)
-
         row.exit_time = now
         row.exit_price = exit_bid
         row.exit_reference_basis = "option_bid"
-        row.exit_reason = exit_reason
+        row.exit_reason = exit_reason.strip()
         row.realized_pnl = realized
         row.status = "closed"
         row = repo.update_trade(row)
-
         repo.append_event(
             PaperTradeEvent(
                 paper_trade_id=row.id,
@@ -269,11 +208,9 @@ class PaperTradeService:
                 details_json={
                     "exit_reference_basis": "option_bid",
                     "exit_price_per_share": exit_bid,
-                    "exit_reason": exit_reason,
+                    "exit_reason": row.exit_reason,
                     "realized_pnl": realized,
-                    "chain_snapshot_time": chain.snapshot_timestamp.isoformat()
-                    if chain.snapshot_timestamp
-                    else None,
+                    "strategy_id": self.STRATEGY_ID,
                 },
             )
         )

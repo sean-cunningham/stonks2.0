@@ -9,6 +9,7 @@ import {
   setPause,
 } from "../api/strategyDashboard";
 import { buildStrategy1ViewModel } from "../strategies/strategy1/buildViewModel";
+import { buildStrategy2ViewModel } from "../strategies/strategy2/buildViewModel";
 import type { DashboardResponse } from "../types/dashboard";
 
 const POLL_MS = 5000;
@@ -82,6 +83,9 @@ export default function DashboardPage() {
     if (!data) return null;
     if (symbol.toLowerCase() === "spy" && strategyId === "strategy-1") {
       return buildStrategy1ViewModel(data);
+    }
+    if (symbol.toLowerCase() === "spy" && strategyId === "strategy-2") {
+      return buildStrategy2ViewModel(data);
     }
     return null;
   }, [data, strategyId, symbol]);

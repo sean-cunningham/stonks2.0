@@ -16,7 +16,17 @@ def get_strategy_catalog() -> list[StrategyMeta]:
             options_scope="long_calls_and_puts_only",
             universe=["SPY"],
             status="not_implemented_yet",
-        )
+        ),
+        StrategyMeta(
+            id="strategy_2_spy_0dte_vol_sniper",
+            name="SPY 0DTE Volatility Sniper",
+            paper_only=True,
+            live_order_routing=False,
+            ai_enabled=False,
+            options_scope="long_calls_and_puts_only",
+            universe=["SPY"],
+            status="not_implemented_yet",
+        ),
     ]
 
 
@@ -36,7 +46,10 @@ def get_status() -> SystemStatusResponse:
         mode=settings.APP_MODE,
         database_connected=check_database_connectivity(),
         current_utc_time=utc_now_iso(),
-        supported_strategies=["strategy_1_spy_continuation"],
+        supported_strategies=[
+            "strategy_1_spy_continuation",
+            "strategy_2_spy_0dte_vol_sniper",
+        ],
         note=(
             "Real SPY market data integration is enabled. Strategy evaluation and "
             "paper execution are not implemented yet."
