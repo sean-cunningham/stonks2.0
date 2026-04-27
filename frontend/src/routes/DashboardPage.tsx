@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import StrategyDashboardShell from "../components/dashboard/StrategyDashboardShell";
 import {
   closeNow,
   fetchDashboard,
+  fetchStrategyCatalog,
   setEntryEnabled,
   setExitEnabled,
+  setPauseAll,
   setPause,
+  type StrategyCatalogItem,
 } from "../api/strategyDashboard";
 import { buildStrategy1ViewModel } from "../strategies/strategy1/buildViewModel";
 import { buildStrategy2ViewModel } from "../strategies/strategy2/buildViewModel";
@@ -60,11 +63,29 @@ function useVisibilityPoll(callback: () => void, intervalMs: number): void {
 }
 
 export default function DashboardPage() {
+  const navigate = useNavigate();
   const { symbol = "spy", strategyId = "strategy-1" } = useParams();
   const [data, setData] = useState<DashboardResponse | null>(null);
+  const [catalog, setCatalog] = useState<StrategyCatalogItem[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const loadCatalog = async () => {
+      try {
+        const out = await fetchStrategyCatalog();
+        if (active) setCatalog(out.strategies);
+      } catch {
+        // Keep dashboard usable even if catalog endpoint temporarily fails.
+      }
+    };
+    void loadCatalog();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -106,6 +127,17 @@ export default function DashboardPage() {
     [load]
   );
 
+  const strategyOptions = useMemo(() => {
+    const symbolUpper = symbol.toUpperCase();
+    const mapCatalogIdToRouteId = (id: string): string => {
+      const n = id.match(/^strategy_(\d+)_/);
+      return n ? `strategy-${n[1]}` : id;
+    };
+    return catalog
+      .filter((s) => s.universe.some((u) => u.toUpperCase() === symbolUpper))
+      .map((s) => ({ label: s.name, value: mapCatalogIdToRouteId(s.id) }));
+  }, [catalog, symbol]);
+
   if (fetchError && !data) {
     return <main className="page">Error loading dashboard: {fetchError}</main>;
   }
@@ -119,8 +151,12 @@ export default function DashboardPage() {
       {actionError && <div className="error-strip">Action failed: {actionError}</div>}
       <StrategyDashboardShell
         vm={vm}
+        strategyOptions={strategyOptions}
+        selectedStrategyId={strategyId}
         actionBusy={busy}
+        onStrategyChange={(nextStrategyId) => navigate(`/paper/strategy/${symbol}/${nextStrategyId}`)}
         onPauseToggle={() => runAction(() => setPause(symbol, strategyId, !vm.runtime.paused))}
+        onPauseAllToggle={() => runAction(() => setPauseAll(!vm.runtime.paused))}
         onEntryToggle={() => runAction(() => setEntryEnabled(symbol, strategyId, !vm.runtime.entry_enabled))}
         onExitToggle={() => runAction(() => setExitEnabled(symbol, strategyId, !vm.runtime.exit_enabled))}
         onCloseNow={(paperTradeId, optionSymbol) => {

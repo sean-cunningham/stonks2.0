@@ -3,6 +3,31 @@ import type { DashboardResponse, RuntimeView } from "../types/dashboard";
 
 /** POST /runtime/* returns this shape; includes `strategy_id` from the coordinator. */
 export type StrategyOneRuntimeMutationResponse = RuntimeView & { strategy_id?: string };
+export type StrategyCatalogItem = {
+  id: string;
+  name: string;
+  paper_only: boolean;
+  live_order_routing: boolean;
+  ai_enabled: boolean;
+  options_scope: string;
+  universe: string[];
+  status: string;
+};
+
+export type StrategyCatalogResponse = {
+  strategies: StrategyCatalogItem[];
+};
+
+export type PauseAllRuntimeResponse = {
+  action: "pause_all" | "resume_all";
+  strategies: Array<{
+    strategy_id: string;
+    paused: boolean;
+    entry_enabled: boolean;
+    exit_enabled: boolean;
+    scheduler_enabled: boolean;
+  }>;
+};
 
 function routeBase(symbol: string, strategyId: string): string {
   return `/paper/strategy/${symbol}/${strategyId}`;
@@ -10,6 +35,10 @@ function routeBase(symbol: string, strategyId: string): string {
 
 export function fetchDashboard(symbol: string, strategyId: string): Promise<DashboardResponse> {
   return apiRequest<DashboardResponse>(`${routeBase(symbol, strategyId)}/dashboard`);
+}
+
+export function fetchStrategyCatalog(): Promise<StrategyCatalogResponse> {
+  return apiRequest<StrategyCatalogResponse>("/system/strategies");
 }
 
 export function setPause(symbol: string, strategyId: string, paused: boolean): Promise<StrategyOneRuntimeMutationResponse> {
@@ -49,4 +78,10 @@ export function setExitEnabled(
 
 export function closeNow(symbol: string, strategyId: string, paperTradeId: number): Promise<unknown> {
   return apiRequest(`${routeBase(symbol, strategyId)}/positions/${paperTradeId}/close-now`, { method: "POST" });
+}
+
+export function setPauseAll(paused: boolean): Promise<PauseAllRuntimeResponse> {
+  return apiRequest<PauseAllRuntimeResponse>(`/paper/runtime/${paused ? "pause-all" : "resume-all"}`, {
+    method: "POST",
+  });
 }

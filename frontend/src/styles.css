@@ -21,7 +21,23 @@ body {
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: center;
+  gap: 12px;
+}
+
+.header-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.strategy-select {
+  margin-left: 8px;
+  background: #0f172a;
+  color: #e5e7eb;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 6px 8px;
 }
 
 .panel {

@@ -14,8 +14,12 @@ import SignalBlockerPanel from "./SignalBlockerPanel";
 
 type Props = {
   vm: StrategyDashboardViewModel;
+  strategyOptions: Array<{ label: string; value: string }>;
+  selectedStrategyId: string;
   actionBusy: boolean;
+  onStrategyChange: (strategyId: string) => void;
   onPauseToggle: () => void;
+  onPauseAllToggle: () => void;
   onEntryToggle: () => void;
   onExitToggle: () => void;
   onCloseNow: (paperTradeId: number, optionSymbol: string) => void;
@@ -23,8 +27,12 @@ type Props = {
 
 export default function StrategyDashboardShell({
   vm,
+  strategyOptions,
+  selectedStrategyId,
   actionBusy,
+  onStrategyChange,
   onPauseToggle,
+  onPauseAllToggle,
   onEntryToggle,
   onExitToggle,
   onCloseNow,
@@ -32,8 +40,27 @@ export default function StrategyDashboardShell({
   return (
     <main className="page">
       <header className="page-header">
-        <h1>{vm.title}</h1>
-        <div className="muted">Last updated: {formatEasternDateTime(vm.asOf)}</div>
+        <div>
+          <h1>{vm.title}</h1>
+          <div className="muted">Last updated: {formatEasternDateTime(vm.asOf)}</div>
+        </div>
+        <div className="header-controls">
+          <label className="muted">
+            Strategy
+            <select
+              className="strategy-select"
+              value={selectedStrategyId}
+              onChange={(e) => onStrategyChange(e.target.value)}
+              disabled={actionBusy || strategyOptions.length === 0}
+            >
+              {strategyOptions.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </header>
 
       <SignalBlockerPanel signal={vm.currentSignal} cycleSummary={vm.cycleSummary} />
@@ -44,6 +71,7 @@ export default function StrategyDashboardShell({
         controls={vm.controls}
         disableActions={actionBusy}
         onPauseToggle={onPauseToggle}
+        onPauseAllToggle={onPauseAllToggle}
         onEntryToggle={onEntryToggle}
         onExitToggle={onExitToggle}
       />

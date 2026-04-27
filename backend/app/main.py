@@ -9,6 +9,7 @@ from app.api.context import router as context_router
 from app.api.debug_dxlink import router as debug_dxlink_router
 from app.api.health import get_health
 from app.api.market import router as market_router
+from app.api.paper_runtime import router as paper_runtime_router
 from app.api.paper_strategy_one import router as paper_strategy_one_router
 from app.api.paper_strategy_two import router as paper_strategy_two_router
 from app.api.strategy_one import router as strategy_one_router
@@ -89,6 +90,7 @@ app.include_router(context_router)
 app.include_router(debug_dxlink_router)
 app.include_router(strategy_one_router)
 app.include_router(strategy_two_router)
+app.include_router(paper_runtime_router)
 app.include_router(paper_strategy_one_router)
 app.include_router(paper_strategy_two_router)
 
