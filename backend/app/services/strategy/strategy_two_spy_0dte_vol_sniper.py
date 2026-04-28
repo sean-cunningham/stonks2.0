@@ -87,11 +87,10 @@ def _is_0dte(expiration_date: str | None, now_utc: datetime) -> bool:
 
 
 def _is_within_entry_window(now_utc: datetime) -> bool:
-    now_et = now_utc.astimezone(_ET).time()
-    for start, end in _ENTRY_WINDOWS_ET:
-        if start <= now_et <= end:
-            return True
-    return False
+    # Temporary override for active paper debugging: bypass time-window gating.
+    # Keep all other strategy filters unchanged (context/market/speed/volume/contract).
+    _ = now_utc
+    return True
 
 
 def _current_1m_signal_metrics(inp: StrategyTwoEvalInput) -> tuple[float | None, float | None, float | None]:
