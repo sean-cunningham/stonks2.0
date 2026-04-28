@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.repositories.strategy_dashboard_baseline_repository import StrategyDashboardBaselineRepository
 from app.repositories.strategy_runtime_repository import StrategyRuntimeRepository
 from app.schemas.strategy_dashboard import (
     StrategyClosedTradeCard,
@@ -20,12 +21,15 @@ from app.schemas.strategy_dashboard import (
     StrategyIdentity,
     StrategyOpenPositionCard,
     StrategyRuntimeView,
+    StrategyStatsBaselineView,
 )
 from app.services.market.context_service import ContextService
 from app.services.market.market_store import MarketStoreService
 from app.services.paper.paper_valuation import compute_open_position_valuation
 from app.services.paper.strategy_dashboard_service import (
     build_mvp_timeseries,
+    closed_trade_purchase_and_sale_usd,
+    compute_current_cash,
     compute_headline_metrics,
     compute_max_drawdown_from_curve,
 )
@@ -65,6 +69,9 @@ def build_strategy_two_dashboard(
     runtime_repo = StrategyRuntimeRepository(db)
 
     runtime = get_strategy_two_runtime_coordinator().get_status(db, settings=settings)
+    baseline_repo = StrategyDashboardBaselineRepository(db)
+    baseline = baseline_repo.get_for_strategy(strategy_id=strategy_id)
+    scope_start = baseline.reset_at if baseline is not None else None
     open_rows = paper_repo.list_open(strategy_id=strategy_id)
     closed_recent = paper_repo.list_closed(strategy_id=strategy_id, limit=20)
     closed_chrono = paper_repo.list_closed_chronological(strategy_id=strategy_id, limit=1000)
@@ -76,6 +83,8 @@ def build_strategy_two_dashboard(
     unrealized_total = 0.0
     valuation_errors = 0
     for row in open_rows:
+        if scope_start is not None and row.entry_time < scope_start:
+            continue
         valuation = compute_open_position_valuation(row, chain, settings)
         unrealized = valuation.unrealized_pnl_bid_basis
         if unrealized is not None:
@@ -100,20 +109,26 @@ def build_strategy_two_dashboard(
             )
         )
 
-    closed_cards = [
-        StrategyClosedTradeCard(
-            paper_trade_id=int(r.id),
-            symbol=r.symbol,
-            option_symbol=r.option_symbol,
-            side=r.side,
-            quantity=int(r.quantity),
-            entry_time=r.entry_time,
-            exit_time=r.exit_time,
-            realized_pnl=float(r.realized_pnl) if r.realized_pnl is not None else None,
-            exit_reason=r.exit_reason,
+    closed_cards = []
+    for r in closed_recent:
+        if scope_start is not None and (r.exit_time is None or r.exit_time < scope_start):
+            continue
+        purchase_usd, sale_usd = closed_trade_purchase_and_sale_usd(r)
+        closed_cards.append(
+            StrategyClosedTradeCard(
+                paper_trade_id=int(r.id),
+                symbol=r.symbol,
+                option_symbol=r.option_symbol,
+                side=r.side,
+                quantity=int(r.quantity),
+                entry_time=r.entry_time,
+                exit_time=r.exit_time,
+                realized_pnl=float(r.realized_pnl) if r.realized_pnl is not None else None,
+                exit_reason=r.exit_reason,
+                total_purchase_price_usd=purchase_usd,
+                total_sale_price_usd=sale_usd,
+            )
         )
-        for r in closed_recent
-    ]
     cycle_cards = [
         StrategyCycleHistoryRow(
             started_at=r.started_at,
@@ -143,18 +158,38 @@ def build_strategy_two_dashboard(
                     latest_affordability_details = _extract_affordability_details(row.notes_summary)
     primary_recent_blocker = max(blocker_counts.items(), key=lambda kv: kv[1])[0] if blocker_counts else None
 
+    scoped_open_rows = open_rows if scope_start is None else [r for r in open_rows if r.entry_time >= scope_start]
+    scoped_closed_chrono = (
+        closed_chrono
+        if scope_start is None
+        else [r for r in closed_chrono if r.exit_time is not None and r.exit_time >= scope_start]
+    )
+    opened_trade_count = (
+        len(open_rows) + len(closed_chrono)
+        if scope_start is None
+        else sum(1 for r in open_rows if r.entry_time >= scope_start)
+        + sum(1 for r in closed_chrono if r.entry_time >= scope_start)
+    )
     evaluation_now, mstatus, _ = build_strategy_two_evaluation_bundle(context, market, settings)
     candidate_blocked = evaluation_now.decision in ("candidate_call", "candidate_put") and auto_open_failure_count > 0
     metrics: StrategyHeadlineMetrics = compute_headline_metrics(
-        closed=closed_chrono,
+        closed=scoped_closed_chrono,
         unrealized_pnl=unrealized_total,
-        open_count=len(open_rows),
+        open_count=len(scoped_open_rows),
+        opened_trade_count=opened_trade_count,
     )
-    starting_cash = float(settings.PAPER_STRATEGY2_ACCOUNT_EQUITY_USD)
-    open_cost_basis = sum(float(r.entry_price) * int(r.quantity) * 100.0 for r in open_rows)
-    metrics.current_cash = starting_cash + float(metrics.realized_pnl) - open_cost_basis
+    starting_cash = (
+        float(baseline.baseline_cash)
+        if baseline is not None
+        else float(settings.PAPER_STRATEGY2_ACCOUNT_EQUITY_USD)
+    )
+    metrics.current_cash = compute_current_cash(
+        starting_cash=starting_cash,
+        open_rows=scoped_open_rows,
+        closed_rows=scoped_closed_chrono,
+    )
     timeseries = build_mvp_timeseries(
-        closed_chronological=closed_chrono,
+        closed_chronological=scoped_closed_chrono,
         current_unrealized_pnl=unrealized_total,
         starting_cash=starting_cash,
         current_cash=float(metrics.current_cash or 0.0),
@@ -163,6 +198,8 @@ def build_strategy_two_dashboard(
     metrics.max_drawdown = compute_max_drawdown_from_curve(timeseries.equity_or_value)
     if valuation_errors:
         timeseries.limitations.append("some open-position valuations were non-actionable; unrealized_pnl may be conservative")
+    if baseline is not None:
+        timeseries.limitations.append("dashboard stats/charts are scoped from the latest manual reset baseline")
 
     return StrategyDashboardResponse(
         as_of_timestamp=as_of,
@@ -204,6 +241,14 @@ def build_strategy_two_dashboard(
             current_near_miss_explanation=evaluation_now.diagnostics.explanation if evaluation_now.diagnostics else None,
             recent_affordability_failure_count=affordability_failure_count,
             latest_affordability_diagnostics=latest_affordability_details,
+        ),
+        stats_baseline=(
+            StrategyStatsBaselineView(
+                reset_at=baseline.reset_at,
+                baseline_cash=float(baseline.baseline_cash),
+            )
+            if baseline is not None
+            else None
         ),
         headline_metrics=metrics,
         open_positions=open_cards,

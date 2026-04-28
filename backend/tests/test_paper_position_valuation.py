@@ -172,6 +172,7 @@ class PaperPositionValuationTests(unittest.TestCase):
         ch = _chain(sym="SPY  260422C00500000", bid=2.0, ask=2.2, snapshot_ts=now.replace(microsecond=0))
         v = compute_open_position_valuation(row, ch, self.settings, now=now)
         self.assertIsNotNone(v.valuation_error)
+        self.assertEqual(v.quote_blocker_code, "option_contract_not_in_near_atm_chain_snapshot")
         self.assertFalse(v.exit_actionable)
         self.assertIsNone(v.current_bid)
         self.assertIsNone(v.unrealized_pnl_bid_basis)

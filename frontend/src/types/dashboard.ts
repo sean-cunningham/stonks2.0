@@ -35,6 +35,7 @@ export type DashboardResponse = {
     can_toggle_entry: boolean;
     can_toggle_exit: boolean;
     emergency_close_supported: boolean;
+    can_reset_stats?: boolean;
   };
   current_signal?: {
     current_decision: "candidate_call" | "candidate_put" | "no_trade" | string;
@@ -52,6 +53,10 @@ export type DashboardResponse = {
     current_near_miss_explanation: string | null;
     recent_affordability_failure_count: number;
     latest_affordability_diagnostics: Record<string, string> | null;
+  } | null;
+  stats_baseline?: {
+    reset_at: string;
+    baseline_cash: number;
   } | null;
   headline_metrics: {
     realized_pnl: number;
@@ -76,9 +81,19 @@ export type DashboardResponse = {
     entry_price: number;
     mark_price: number | null;
     unrealized_pnl: number | null;
+    unrealized_pnl_pct?: number | null;
+    stop_price?: number | null;
+    take_profit_price?: number | null;
     quote_is_fresh: boolean;
     exit_actionable: boolean;
     monitor_state: string | null;
+    current_bid?: number | null;
+    current_ask?: number | null;
+    quote_timestamp?: string | null;
+    quote_resolution_source?: string | null;
+    quote_blocker_code?: string | null;
+    exit_blocked_reasons?: string[];
+    entry_underlying_price?: number | null;
   }>;
   recent_closed_trades: Array<{
     paper_trade_id: number;
@@ -90,6 +105,10 @@ export type DashboardResponse = {
     exit_time: string | null;
     realized_pnl: number | null;
     exit_reason: string | null;
+    /** entry_price × 100 × qty */
+    total_purchase_price_usd?: number | null;
+    /** exit_price × 100 × qty */
+    total_sale_price_usd?: number | null;
   }>;
   recent_cycle_history: Array<{
     started_at: string;
@@ -120,6 +139,7 @@ export type StrategyDashboardViewModel = {
   controls: DashboardResponse["controls"];
   currentSignal: NonNullable<DashboardResponse["current_signal"]> | null;
   cycleSummary: NonNullable<DashboardResponse["cycle_summary"]> | null;
+  statsBaseline: NonNullable<DashboardResponse["stats_baseline"]> | null;
   metrics: DashboardResponse["headline_metrics"];
   equitySeries: DashboardPoint[];
   equityReturnSeries: DashboardPoint[];

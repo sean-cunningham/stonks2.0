@@ -3,8 +3,10 @@ import { useNavigate, useParams } from "react-router-dom";
 import StrategyDashboardShell from "../components/dashboard/StrategyDashboardShell";
 import {
   closeNow,
+  emergencyCloseUnquoted,
   fetchDashboard,
   fetchStrategyCatalog,
+  resetDashboardStats,
   setEntryEnabled,
   setExitEnabled,
   setPauseAll,
@@ -159,6 +161,13 @@ export default function DashboardPage() {
         onPauseAllToggle={() => runAction(() => setPauseAll(!vm.runtime.paused))}
         onEntryToggle={() => runAction(() => setEntryEnabled(symbol, strategyId, !vm.runtime.entry_enabled))}
         onExitToggle={() => runAction(() => setExitEnabled(symbol, strategyId, !vm.runtime.exit_enabled))}
+        onResetStats={() => {
+          const ok = window.confirm(
+            "Reset dashboard stats baseline?\n\nThis keeps historical trades but restarts metrics/charts from the current account state."
+          );
+          if (!ok) return;
+          void runAction(() => resetDashboardStats(symbol, strategyId));
+        }}
         onCloseNow={(paperTradeId, optionSymbol) => {
           const ok = window.confirm(
             `Emergency Close Now?\n\nTrade #${paperTradeId}\n${optionSymbol}\n\nThis is an immediate manual override.`
@@ -166,6 +175,18 @@ export default function DashboardPage() {
           if (!ok) return;
           void runAction(() => closeNow(symbol, strategyId, paperTradeId));
         }}
+        showPaperEmergencyUnquoted={symbol.toLowerCase() === "spy" && strategyId === "strategy-1"}
+        onEmergencyCloseUnquoted={
+          symbol.toLowerCase() === "spy" && strategyId === "strategy-1"
+            ? (paperTradeId, optionSymbol) => {
+                const ok = window.confirm(
+                  `Paper emergency close?\n\nTrade #${paperTradeId}\n${optionSymbol}\n\nUses the live option bid when available; only uses a $0 synthetic exit if no quote can be fetched.`
+                );
+                if (!ok) return;
+                void runAction(() => emergencyCloseUnquoted(symbol, strategyId, paperTradeId));
+              }
+            : undefined
+        }
       />
     </>
   );

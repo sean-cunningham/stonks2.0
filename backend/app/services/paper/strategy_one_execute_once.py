@@ -105,7 +105,10 @@ def run_strategy_one_paper_execute_once(
         resolution = market.resolve_spy_market_for_evaluation()
         mstatus = resolution.final_status
         chain = market.get_latest_chain()
-        valuation = compute_open_position_valuation(row, chain, settings)
+        held = market.resolve_open_paper_option_contract(option_symbol=row.option_symbol, chain=chain)
+        valuation = compute_open_position_valuation(
+            row, chain, settings, now=clock, held_resolution=held
+        )
         exit_eval = evaluate_strategy_one_open_exit_readonly(
             ExitEvaluationInput(
                 position=row,
@@ -144,6 +147,7 @@ def run_strategy_one_paper_execute_once(
                 market_status=mstatus,
                 exit_reason=AUTO_EXIT_REASON,
                 settings=settings,
+                held_contract_resolution=held,
             )
         except PaperTradeError as exc:
             notes.append(f"auto_close_failed:{exc}")
@@ -228,7 +232,8 @@ def run_emergency_close_open_paper_trade(
     row = repo.get_trade(paper_trade_id)
     if row is None or row.strategy_id != PaperTradeService.STRATEGY_ID or row.status != "open":
         raise PaperTradeError("paper_trade_not_open_for_emergency_close")
-    valuation = compute_open_position_valuation(row, chain, settings)
+    held = market.resolve_open_paper_option_contract(option_symbol=row.option_symbol, chain=chain)
+    valuation = compute_open_position_valuation(row, chain, settings, held_resolution=held)
     require_acceptable_exit_quote_for_execution(valuation)
     svc = PaperTradeService()
     return svc.close_position(
@@ -238,4 +243,5 @@ def run_emergency_close_open_paper_trade(
         market_status=mstatus,
         exit_reason=EMERGENCY_EXIT_REASON,
         settings=settings,
+        held_contract_resolution=held,
     )

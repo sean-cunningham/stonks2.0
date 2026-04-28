@@ -9,6 +9,7 @@ from app.api.strategy_one import get_context_service, get_market_service
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.repositories.strategy_dashboard_baseline_repository import StrategyDashboardBaselineRepository
 from app.schemas.market import ChainLatestResponse, MarketStatusResponse
 from app.schemas.paper_trade import (
     PaperCloseRequest,
@@ -22,7 +23,7 @@ from app.schemas.strategy_one_position_monitor import (
     StrategyOneOpenPositionsMonitorResponse,
 )
 from app.schemas.strategy import StrategyOneEvaluationResponse
-from app.schemas.strategy_dashboard import StrategyDashboardResponse
+from app.schemas.strategy_dashboard import StrategyDashboardResponse, StrategyStatsBaselineView
 from app.schemas.strategy_one_paper_execution import StrategyOneExecuteOnceResponse
 from app.schemas.strategy_one_runtime import StrategyOneRuntimeStatusResponse
 from app.services.market.context_service import ContextService
@@ -50,6 +51,10 @@ def _require_paper_app_mode(settings: Settings) -> None:
         )
 
 
+def _paper_trade_http_detail(exc: PaperTradeError) -> dict:
+    return {"code": exc.code, **exc.details}
+
+
 @router.post("/execute-once", response_model=StrategyOneExecuteOnceResponse)
 def execute_strategy_one_paper_once(
     db: Session = Depends(get_db),
@@ -71,6 +76,20 @@ def get_strategy_one_dashboard(
     settings = get_settings()
     _require_paper_app_mode(settings)
     return build_strategy_one_dashboard(db, context=context, market=market, settings=settings)
+
+
+@router.post("/dashboard/reset", response_model=StrategyStatsBaselineView)
+def reset_strategy_one_dashboard_stats(db: Session = Depends(get_db)) -> StrategyStatsBaselineView:
+    """Set/reset dashboard baseline so stats/charts restart from configured starting equity."""
+    settings = get_settings()
+    _require_paper_app_mode(settings)
+    strategy_id = PaperTradeService.STRATEGY_ID
+    repo = PaperTradeRepository(db)
+    baseline_cash = float(settings.PAPER_STRATEGY1_ACCOUNT_EQUITY_USD)
+    baseline_repo = StrategyDashboardBaselineRepository(db)
+    now = repo.utc_now()
+    row = baseline_repo.upsert_for_strategy(strategy_id=strategy_id, reset_at=now, baseline_cash=baseline_cash)
+    return StrategyStatsBaselineView(reset_at=row.reset_at, baseline_cash=float(row.baseline_cash))
 
 
 @router.get("/runtime/status", response_model=StrategyOneRuntimeStatusResponse)
@@ -158,7 +177,29 @@ def emergency_close_paper_position_now(
         code = str(exc)
         if code == "paper_trade_not_open_for_emergency_close":
             raise HTTPException(status.HTTP_404_NOT_FOUND, detail=code) from exc
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=code) from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=_paper_trade_http_detail(exc)) from exc
+    return PaperTradeResponse.model_validate(row)
+
+
+@router.post("/positions/{paper_trade_id}/emergency-close-unquoted", response_model=PaperTradeResponse)
+def emergency_close_unquoted_paper_position(
+    paper_trade_id: int,
+    db: Session = Depends(get_db),
+    market: MarketStoreService = Depends(get_market_service),
+) -> PaperTradeResponse:
+    """Paper emergency close: uses live option bid when available; $0 only if no quotable leg (Strategy 1 only)."""
+    settings = get_settings()
+    _require_paper_app_mode(settings)
+    svc = PaperTradeService()
+    try:
+        row = svc.emergency_close_unquoted_paper_position(
+            db, paper_trade_id=paper_trade_id, market=market, settings=settings
+        )
+    except PaperTradeError as exc:
+        code = str(exc)
+        if code in ("paper_trade_not_found", "paper_trade_not_open", "paper_trade_strategy_mismatch"):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, detail=code) from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=_paper_trade_http_detail(exc)) from exc
     return PaperTradeResponse.model_validate(row)
 
 
@@ -196,6 +237,11 @@ def close_paper_position(
     settings = get_settings()
     resolution = market.resolve_spy_market_for_evaluation()
     chain = market.get_latest_chain()
+    repo = PaperTradeRepository(db)
+    row_chk = repo.get_trade(paper_trade_id)
+    if row_chk is None or row_chk.strategy_id != PaperTradeService.STRATEGY_ID or row_chk.status != "open":
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="open_paper_trade_not_found")
+    held = market.resolve_open_paper_option_contract(option_symbol=row_chk.option_symbol, chain=chain)
     svc = PaperTradeService()
     try:
         row = svc.close_position(
@@ -205,9 +251,10 @@ def close_paper_position(
             market_status=resolution.final_status,
             exit_reason=body.exit_reason,
             settings=settings,
+            held_contract_resolution=held,
         )
     except PaperTradeError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=_paper_trade_http_detail(exc)) from exc
     return PaperTradeResponse.model_validate(row)
 
 
@@ -229,7 +276,11 @@ def list_open_paper_position_valuations(
     chain = market.get_latest_chain()
     repo = PaperTradeRepository(db)
     rows = repo.list_open(strategy_id=PaperTradeService.STRATEGY_ID)
-    return [compute_open_position_valuation(r, chain, settings) for r in rows]
+    out: list[PaperOpenPositionValuationResponse] = []
+    for r in rows:
+        held = market.resolve_open_paper_option_contract(option_symbol=r.option_symbol, chain=chain)
+        out.append(compute_open_position_valuation(r, chain, settings, held_resolution=held))
+    return out
 
 
 @router.get("/positions/open/monitor", response_model=StrategyOneOpenPositionsMonitorResponse)
@@ -254,6 +305,7 @@ def list_open_positions_monitor(
         context_status=st,
         context_summary=summary,
         market_status=mstatus,
+        market=market,
     )
 
 
@@ -282,6 +334,7 @@ def get_open_position_monitor(
         context_status=st,
         context_summary=summary,
         market_status=mstatus,
+        market=market,
     )
 
 
@@ -303,7 +356,8 @@ def get_open_paper_position_exit_evaluation(
     resolution = market.resolve_spy_market_for_evaluation()
     mstatus = resolution.final_status
     chain = market.get_latest_chain()
-    valuation = compute_open_position_valuation(row, chain, settings)
+    held = market.resolve_open_paper_option_contract(option_symbol=row.option_symbol, chain=chain)
+    valuation = compute_open_position_valuation(row, chain, settings, held_resolution=held)
     inp = ExitEvaluationInput(
         position=row,
         valuation=valuation,
@@ -328,7 +382,8 @@ def get_open_paper_position_valuation(
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="open_paper_trade_not_found")
     market.resolve_spy_market_for_evaluation()
     chain = market.get_latest_chain()
-    return compute_open_position_valuation(row, chain, settings)
+    held = market.resolve_open_paper_option_contract(option_symbol=row.option_symbol, chain=chain)
+    return compute_open_position_valuation(row, chain, settings, held_resolution=held)
 
 
 @router.get("/positions/closed", response_model=list[PaperTradeResponse])

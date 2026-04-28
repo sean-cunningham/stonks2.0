@@ -108,6 +108,126 @@ class TastytradeMarketDataService:
             source_status="ok",
         )
 
+    @staticmethod
+    def pick_quote_map_entry(
+        requested: str, quote_map: dict[str, dict[str, float | str | None]]
+    ) -> dict[str, float | str | None] | None:
+        """Match DXLink ``eventSymbol`` keys to the requested OCC/streamer string (spacing may differ)."""
+        if requested in quote_map:
+            return quote_map[requested]
+        norm_req = " ".join(requested.split())
+        for k, v in quote_map.items():
+            if " ".join(str(k).split()) == norm_req:
+                return v
+        compact_req = requested.replace(" ", "")
+        for k, v in quote_map.items():
+            if str(k).replace(" ", "") == compact_req:
+                return v
+        return None
+
+    @staticmethod
+    def _compact_option_symbol_key(symbol: str) -> str:
+        return "".join(str(symbol).split()).upper()
+
+    def _fetch_spy_chain_contract_items(self, access_token: str) -> list[dict[str, Any]]:
+        """Raw option contract dicts from the SPY chain endpoint (flat or nested)."""
+        chain_data, _ = self._request_first_success(
+            base_url=self._settings.TASTYTRADE_API_BASE_URL,
+            paths=[
+                "/option-chains/SPY",
+                "/option-chains/SPY/nested",
+            ],
+            token=access_token,
+        )
+        payload = chain_data.get("data") if isinstance(chain_data.get("data"), dict) else chain_data
+        contracts = payload.get("items")
+        if not isinstance(contracts, list) or not contracts:
+            nested_items = payload.get("items")
+            if isinstance(nested_items, list) and nested_items and isinstance(nested_items[0], dict):
+                contracts = self._extract_contracts_from_nested_items(nested_items)
+        if not isinstance(contracts, list):
+            return []
+        return contracts
+
+    def _occ_to_streamer_map(self, contracts: list[dict[str, Any]]) -> dict[str, str]:
+        """Map compact OCC ``symbol`` -> ``streamer-symbol`` for DXLink FEED subscription."""
+        out: dict[str, str] = {}
+        for contract in contracts:
+            if not isinstance(contract, dict):
+                continue
+            occ = str(contract.get("symbol") or "").strip()
+            if not occ:
+                continue
+            streamer = str(
+                contract.get("streamer-symbol") or contract.get("streamer_symbol") or contract.get("streamerSymbol") or ""
+            ).strip()
+            if not streamer:
+                continue
+            key = self._compact_option_symbol_key(occ)
+            out.setdefault(key, streamer)
+        return out
+
+    @staticmethod
+    def _subscription_symbol_likely_streamer(symbol: str) -> bool:
+        s = str(symbol).strip()
+        return s.startswith(".")
+
+    def fetch_direct_option_quotes(
+        self, option_symbols: list[str]
+    ) -> tuple[datetime, dict[str, dict[str, float | str | None]]]:
+        """Live DXLink quotes for explicit option symbols (OCC or streamer).
+
+        OCC-style symbols (e.g. ``SPY  260429C00714000``) are mapped via the SPY chain instrument
+        list to the broker ``streamer-symbol`` before subscribing — DXLink expects the streamer id.
+        """
+        if not option_symbols:
+            return datetime.now(timezone.utc), {}
+        access = self._auth_service.get_access_token()
+        quote_token = self._auth_service.get_quote_token(access.access_token)
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for s in option_symbols:
+            if s and s not in seen:
+                seen.add(s)
+                uniq.append(s)
+
+        needs_occ_map = any(not self._subscription_symbol_likely_streamer(s) for s in uniq)
+        occ_to_streamer: dict[str, str] = {}
+        if needs_occ_map:
+            items = self._fetch_spy_chain_contract_items(access.access_token)
+            occ_to_streamer = self._occ_to_streamer_map(items)
+
+        streamers_to_sub: list[str] = []
+        streamer_seen: set[str] = set()
+        request_to_streamer: dict[str, str] = {}
+        for req in uniq:
+            if self._subscription_symbol_likely_streamer(req):
+                st = req.strip()
+            else:
+                key = self._compact_option_symbol_key(req)
+                st = occ_to_streamer.get(key)
+                if not st:
+                    logger.warning(
+                        "Option symbol not found in SPY chain for DXLink subscription: %r (compact=%r)",
+                        req,
+                        key,
+                    )
+                    raise MarketDataError("option_symbol_not_in_chain_for_direct_quote")
+            request_to_streamer[req] = st
+            if st not in streamer_seen:
+                streamer_seen.add(st)
+                streamers_to_sub.append(st)
+
+        quote_map_raw = self._fetch_quotes_via_dxlink(quote_token.dxlink_url, quote_token.token, streamers_to_sub)
+        as_of = datetime.now(timezone.utc)
+        out: dict[str, dict[str, float | str | None]] = {}
+        for req in uniq:
+            st = request_to_streamer[req]
+            row = self.pick_quote_map_entry(st, quote_map_raw) or self.pick_quote_map_entry(req, quote_map_raw)
+            if row is not None:
+                out[req] = row
+        return as_of, out
+
     def fetch_spy_option_chain(self, underlying_price: float | None) -> ChainSummaryNormalized:
         """Fetch and normalize current SPY option chain snapshot with quote enrichment."""
         if underlying_price is None:

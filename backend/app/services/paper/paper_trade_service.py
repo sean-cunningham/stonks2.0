@@ -12,7 +12,10 @@ from app.models.trade import PaperTrade, PaperTradeEvent
 from app.repositories.paper_trade_repository import PaperTradeRepository
 from app.schemas.market import ChainLatestResponse, MarketStatusResponse, NearAtmContract
 from app.schemas.strategy import StrategyOneEvaluationResponse
+from app.services.market.market_store import MarketStoreService
 from app.services.paper.contract_constants import OPTION_CONTRACT_MULTIPLIER
+from app.services.paper.held_option_contract_resolution import HeldOptionContractResolution
+from app.services.paper.paper_valuation import compute_open_position_valuation
 from app.services.paper.strategy_one_entry_policies import (
     EntryPolicyRejected,
     assign_exit_and_sizing_policies_v1,
@@ -26,6 +29,10 @@ class PaperTradeError(Exception):
         super().__init__(code)
         self.code = code
         self.details = details or {}
+
+    # Backward-compatible: some call sites use str(exc) only.
+    def __str__(self) -> str:  # type: ignore[override]
+        return self.code
 
 
 def _chain_age_seconds(chain: ChainLatestResponse) -> float | None:
@@ -47,6 +54,27 @@ def _validate_chain_for_paper_quote(chain: ChainLatestResponse, settings: Settin
         raise PaperTradeError("option_chain_timestamp_missing")
     if age > settings.MARKET_CHAIN_MAX_AGE_SECONDS:
         raise PaperTradeError("option_chain_quote_stale")
+
+
+def _held_quote_age_seconds(*, quote_timestamp: datetime, clock: datetime) -> float:
+    ts = quote_timestamp if quote_timestamp.tzinfo else quote_timestamp.replace(tzinfo=timezone.utc)
+    return max((clock - ts).total_seconds(), 0.0)
+
+
+def _validate_held_quote_fresh_for_close(
+    held: HeldOptionContractResolution,
+    settings: Settings,
+    *,
+    clock: datetime,
+) -> None:
+    age = _held_quote_age_seconds(quote_timestamp=held.quote_timestamp, clock=clock)
+    if age > settings.MARKET_CHAIN_MAX_AGE_SECONDS:
+        raise PaperTradeError("stale_option_quote_for_open_position", details={"age_seconds": age})
+
+
+MANUAL_EMERGENCY_CLOSE_AT_MARKET_BID = "manual_emergency_close_at_market_bid"
+MANUAL_EMERGENCY_CLOSE_UNQUOTED = "manual_emergency_close_unquoted"
+EXIT_REFERENCE_PAPER_EMERGENCY_UNQUOTED = "paper_emergency_unquoted"
 
 
 def _find_contract(chain: ChainLatestResponse, option_symbol: str) -> NearAtmContract:
@@ -228,11 +256,13 @@ class PaperTradeService:
         market_status: MarketStatusResponse,
         exit_reason: str,
         settings: Settings,
+        held_contract_resolution: HeldOptionContractResolution | None = None,
+        bypass_market_ready_guard: bool = False,
     ) -> PaperTrade:
         if not exit_reason or not exit_reason.strip():
             raise PaperTradeError("exit_reason_required")
         exit_reason = exit_reason.strip()
-        if not market_status.market_ready:
+        if not bypass_market_ready_guard and not market_status.market_ready:
             raise PaperTradeError("market_not_ready_for_paper_exit")
 
         repo = PaperTradeRepository(db)
@@ -244,13 +274,49 @@ class PaperTradeService:
         if row.status != "open":
             raise PaperTradeError("paper_trade_not_open")
 
-        _validate_chain_for_paper_quote(chain, settings)
-        quote = _find_contract(chain, row.option_symbol)
-        if quote.bid is None or float(quote.bid) <= 0:
-            raise PaperTradeError("option_bid_missing_for_exit")
-
         now = repo.utc_now()
-        exit_bid = float(quote.bid)
+        quote_snapshot_iso: str | None = None
+        quote_resolution: str | None = None
+
+        if held_contract_resolution is not None:
+            _validate_held_quote_fresh_for_close(held_contract_resolution, settings, clock=now)
+            quote = held_contract_resolution.contract
+            quote_resolution = held_contract_resolution.source
+            quote_snapshot_iso = held_contract_resolution.quote_timestamp.isoformat()
+        else:
+            try:
+                _validate_chain_for_paper_quote(chain, settings)
+            except PaperTradeError as exc:
+                code = str(exc)
+                if code == "option_chain_quote_stale":
+                    raise PaperTradeError(
+                        "stale_option_quote_for_open_position",
+                        details={"option_symbol": row.option_symbol},
+                    ) from exc
+                raise
+            try:
+                quote = _find_contract(chain, row.option_symbol)
+            except PaperTradeError as exc:
+                if str(exc) == "option_contract_not_in_chain_snapshot":
+                    raise PaperTradeError(
+                        "missing_option_quote_for_open_position",
+                        details={"option_symbol": row.option_symbol},
+                    ) from exc
+                raise
+            quote_resolution = "chain_near_atm"
+            quote_snapshot_iso = chain.snapshot_timestamp.isoformat() if chain.snapshot_timestamp else None
+
+        bid = float(quote.bid) if quote.bid is not None else None
+        ask = float(quote.ask) if quote.ask is not None else None
+        if bid is None or bid <= 0:
+            raise PaperTradeError(
+                "missing_option_quote_for_open_position",
+                details={"leg": "bid", "option_symbol": row.option_symbol},
+            )
+        if ask is not None and bid is not None and ask < bid:
+            raise PaperTradeError("invalid_bid_ask_for_open_position", details={"option_symbol": row.option_symbol})
+
+        exit_bid = bid
         realized = (exit_bid - float(row.entry_price)) * OPTION_CONTRACT_MULTIPLIER * int(row.quantity)
 
         row.exit_time = now
@@ -271,9 +337,80 @@ class PaperTradeService:
                     "exit_price_per_share": exit_bid,
                     "exit_reason": exit_reason,
                     "realized_pnl": realized,
-                    "chain_snapshot_time": chain.snapshot_timestamp.isoformat()
-                    if chain.snapshot_timestamp
-                    else None,
+                    "chain_snapshot_time": quote_snapshot_iso,
+                    "quote_resolution_source": quote_resolution,
+                },
+            )
+        )
+        return row
+
+    def emergency_close_unquoted_paper_position(
+        self,
+        db: Session,
+        *,
+        paper_trade_id: int,
+        market: MarketStoreService,
+        settings: Settings,
+    ) -> PaperTrade:
+        """Paper emergency: prefer close at live **option bid** (chain or direct quote); else $0 synthetic exit.
+
+        The UI label may say \"unquoted\"; the server always attempts a real mark first so closed-trade
+        sale notional matches the best available quote at request time.
+        """
+        repo = PaperTradeRepository(db)
+        row = repo.get_trade(paper_trade_id)
+        if row is None:
+            raise PaperTradeError("paper_trade_not_found")
+        if row.strategy_id != self.strategy_id:
+            raise PaperTradeError("paper_trade_strategy_mismatch")
+        if row.status != "open":
+            raise PaperTradeError("paper_trade_not_open")
+
+        resolution = market.resolve_spy_market_for_evaluation()
+        mstatus = resolution.final_status
+        chain = market.get_latest_chain()
+        held = market.resolve_open_paper_option_contract(option_symbol=row.option_symbol, chain=chain)
+        now = repo.utc_now()
+        valuation = compute_open_position_valuation(row, chain, settings, now=now, held_resolution=held)
+        quote_ok = (
+            not valuation.valuation_error
+            and valuation.quote_is_fresh
+            and valuation.exit_actionable
+        )
+        if quote_ok:
+            bypass = not mstatus.market_ready
+            return self.close_position(
+                db,
+                paper_trade_id=paper_trade_id,
+                chain=chain,
+                market_status=mstatus,
+                exit_reason=MANUAL_EMERGENCY_CLOSE_AT_MARKET_BID,
+                settings=settings,
+                held_contract_resolution=held,
+                bypass_market_ready_guard=bypass,
+            )
+
+        exit_px = 0.0
+        realized = (exit_px - float(row.entry_price)) * OPTION_CONTRACT_MULTIPLIER * int(row.quantity)
+        row.exit_time = now
+        row.exit_price = exit_px
+        row.exit_reference_basis = EXIT_REFERENCE_PAPER_EMERGENCY_UNQUOTED
+        row.exit_reason = MANUAL_EMERGENCY_CLOSE_UNQUOTED
+        row.realized_pnl = realized
+        row.status = "closed"
+        row = repo.update_trade(row)
+        repo.append_event(
+            PaperTradeEvent(
+                paper_trade_id=row.id,
+                event_time=now,
+                event_type="close",
+                details_json={
+                    "exit_reference_basis": EXIT_REFERENCE_PAPER_EMERGENCY_UNQUOTED,
+                    "exit_price_per_share": exit_px,
+                    "exit_reason": MANUAL_EMERGENCY_CLOSE_UNQUOTED,
+                    "realized_pnl": realized,
+                    "paper_emergency_unquoted": True,
+                    "paper_emergency_quote_attempt_failed": True,
                 },
             )
         )

@@ -8,6 +8,7 @@ type Props = {
   onPauseAllToggle: () => void;
   onEntryToggle: () => void;
   onExitToggle: () => void;
+  onResetStats: () => void;
 };
 
 export default function RuntimeControlsPanel({
@@ -18,10 +19,12 @@ export default function RuntimeControlsPanel({
   onPauseAllToggle,
   onEntryToggle,
   onExitToggle,
+  onResetStats,
 }: Props) {
   const pauseDisabled = disableActions || !controls.can_pause_resume;
   const entryDisabled = disableActions || !controls.can_toggle_entry;
   const exitDisabled = disableActions || !controls.can_toggle_exit;
+  const resetDisabled = disableActions || !controls.can_reset_stats;
 
   return (
     <section className="panel">
@@ -31,7 +34,7 @@ export default function RuntimeControlsPanel({
         <div>Paused: {runtime.paused ? "Yes" : "No"}</div>
         <div>New entries: {runtime.entry_enabled ? "Allowed" : "Blocked"}</div>
         <div>Automatic exits: {runtime.exit_enabled ? "Allowed" : "Blocked"}</div>
-        <div>Cycle running: {runtime.running ? "Yes" : "No"}</div>
+        <div>Cycle in progress: {runtime.running ? "Yes" : "No"}</div>
       </div>
       <div className="actions">
         <button disabled={pauseDisabled} onClick={onPauseToggle} title={!controls.can_pause_resume ? "Not allowed by server" : undefined}>
@@ -49,6 +52,9 @@ export default function RuntimeControlsPanel({
         </button>
         <button disabled={exitDisabled} onClick={onExitToggle} title={!controls.can_toggle_exit ? "Not allowed by server" : undefined}>
           {runtime.exit_enabled ? "Block automatic exits" : "Allow automatic exits"}
+        </button>
+        <button disabled={resetDisabled} onClick={onResetStats} title={!controls.can_reset_stats ? "Not allowed by server" : undefined}>
+          Reset dashboard stats
         </button>
       </div>
     </section>

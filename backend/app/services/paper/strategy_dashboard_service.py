@@ -6,18 +6,42 @@ from datetime import datetime
 
 from app.models.trade import PaperTrade
 from app.schemas.strategy_dashboard import StrategyHeadlineMetrics, StrategyTimeseries, TimeSeriesPoint
+from app.services.paper.contract_constants import OPTION_CONTRACT_MULTIPLIER
 
 
-def compute_headline_metrics(*, closed: list[PaperTrade], unrealized_pnl: float, open_count: int) -> StrategyHeadlineMetrics:
+def closed_trade_purchase_and_sale_usd(r: PaperTrade) -> tuple[float | None, float | None]:
+    """Total premium paid at open and received at close (per-share price × 100 × qty)."""
+    q = int(r.quantity)
+    try:
+        purchase = float(r.entry_price) * OPTION_CONTRACT_MULTIPLIER * q
+    except (TypeError, ValueError):
+        purchase = None
+    sale: float | None = None
+    if r.exit_price is not None:
+        try:
+            sale = float(r.exit_price) * OPTION_CONTRACT_MULTIPLIER * q
+        except (TypeError, ValueError):
+            sale = None
+    return purchase, sale
+
+
+def compute_headline_metrics(
+    *,
+    closed: list[PaperTrade],
+    unrealized_pnl: float,
+    open_count: int,
+    opened_trade_count: int | None = None,
+) -> StrategyHeadlineMetrics:
     realized_values = [float(r.realized_pnl) for r in closed if r.realized_pnl is not None]
     realized = float(sum(realized_values))
     wins = [p for p in realized_values if p > 0]
     losses = [p for p in realized_values if p < 0]
-    trade_count = len(realized_values)
-    win_rate = (len(wins) / trade_count) if trade_count > 0 else None
+    closed_trade_count = len(realized_values)
+    trade_count = int(opened_trade_count) if opened_trade_count is not None else closed_trade_count
+    win_rate = (len(wins) / closed_trade_count) if closed_trade_count > 0 else None
     avg_win = (sum(wins) / len(wins)) if wins else None
     avg_loss = (sum(losses) / len(losses)) if losses else None
-    expectancy = (realized / trade_count) if trade_count > 0 else None
+    expectancy = (realized / closed_trade_count) if closed_trade_count > 0 else None
     total = realized + float(unrealized_pnl)
     return StrategyHeadlineMetrics(
         realized_pnl=realized,
@@ -31,6 +55,12 @@ def compute_headline_metrics(*, closed: list[PaperTrade], unrealized_pnl: float,
         max_drawdown=None,
         open_position_count=open_count,
     )
+
+
+def compute_current_cash(*, starting_cash: float, open_rows: list[PaperTrade], closed_rows: list[PaperTrade]) -> float:
+    realized = float(sum(float(r.realized_pnl or 0.0) for r in closed_rows))
+    open_cost_basis = sum(float(r.entry_price) * int(r.quantity) * OPTION_CONTRACT_MULTIPLIER for r in open_rows)
+    return float(starting_cash) + realized - open_cost_basis
 
 
 def build_mvp_timeseries(

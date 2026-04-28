@@ -9,8 +9,9 @@ from app.api.strategy_one import get_context_service, get_market_service
 from app.core.config import Settings, get_settings
 from app.core.database import get_db
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.repositories.strategy_dashboard_baseline_repository import StrategyDashboardBaselineRepository
 from app.schemas.paper_trade import PaperTradeEventResponse, PaperTradeResponse
-from app.schemas.strategy_dashboard import StrategyDashboardResponse
+from app.schemas.strategy_dashboard import StrategyDashboardResponse, StrategyStatsBaselineView
 from app.schemas.strategy_two_paper_execution import StrategyTwoExecuteOnceResponse
 from app.schemas.strategy_two_runtime import StrategyTwoRuntimeStatusResponse
 from app.services.market.context_service import ContextService
@@ -55,6 +56,20 @@ def get_strategy_two_dashboard(
     settings = get_settings()
     _require_paper_app_mode(settings)
     return build_strategy_two_dashboard(db, context=context, market=market, settings=settings)
+
+
+@router.post("/dashboard/reset", response_model=StrategyStatsBaselineView)
+def reset_strategy_two_dashboard_stats(db: Session = Depends(get_db)) -> StrategyStatsBaselineView:
+    """Set/reset dashboard baseline so stats/charts restart from configured starting equity."""
+    settings = get_settings()
+    _require_paper_app_mode(settings)
+    strategy_id = StrategyTwoPaperTradeService.STRATEGY_ID
+    repo = PaperTradeRepository(db)
+    baseline_cash = float(settings.PAPER_STRATEGY2_ACCOUNT_EQUITY_USD)
+    baseline_repo = StrategyDashboardBaselineRepository(db)
+    now = repo.utc_now()
+    row = baseline_repo.upsert_for_strategy(strategy_id=strategy_id, reset_at=now, baseline_cash=baseline_cash)
+    return StrategyStatsBaselineView(reset_at=row.reset_at, baseline_cash=float(row.baseline_cash))
 
 
 @router.get("/runtime/status", response_model=StrategyTwoRuntimeStatusResponse)

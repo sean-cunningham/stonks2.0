@@ -1,4 +1,5 @@
 import type { DashboardResponse } from "../../types/dashboard";
+import { humanizeExitReason } from "../../utils/dashboardHumanize";
 import { formatEasternDateTime } from "../../utils/formatEasternTime";
 
 type Row = DashboardResponse["recent_closed_trades"][number];
@@ -33,6 +34,8 @@ export default function ClosedTradesTable({ rows }: Props) {
                 <th>Contract</th>
                 <th>Entry (ET)</th>
                 <th>Exit (ET)</th>
+                <th>Total purchase</th>
+                <th>Total sale</th>
                 <th>Realized P&amp;L</th>
                 <th>Exit reason</th>
               </tr>
@@ -44,8 +47,10 @@ export default function ClosedTradesTable({ rows }: Props) {
                   <td className="mono">{r.option_symbol}</td>
                   <td>{formatEasternDateTime(r.entry_time)}</td>
                   <td>{r.exit_time ? formatEasternDateTime(r.exit_time) : "—"}</td>
+                  <td>{money(r.total_purchase_price_usd ?? null)}</td>
+                  <td>{money(r.total_sale_price_usd ?? null)}</td>
                   <td>{money(r.realized_pnl)}</td>
-                  <td>{r.exit_reason ?? "—"}</td>
+                  <td title={r.exit_reason ?? ""}>{humanizeExitReason(r.exit_reason)}</td>
                 </tr>
               ))}
             </tbody>

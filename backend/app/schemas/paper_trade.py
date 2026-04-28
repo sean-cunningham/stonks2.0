@@ -69,5 +69,13 @@ class PaperOpenPositionValuationResponse(BaseModel):
     valuation_error: str | None = None
     exit_policy: dict[str, Any] | None = None
     sizing_policy: dict[str, Any] | None = None
+    quote_resolution_source: str | None = Field(
+        default=None,
+        description="chain_near_atm | direct_dxlink — how bid/ask were resolved for this leg.",
+    )
+    quote_blocker_code: str | None = Field(
+        default=None,
+        description="Machine code when marks are missing or exit is not actionable.",
+    )
 
 

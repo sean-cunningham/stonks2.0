@@ -15,6 +15,8 @@ from app.schemas.strategy_one_position_monitor import (
     StrategyOneOpenPositionsMonitorResponse,
     StrategyOnePositionMonitorRow,
 )
+from app.services.market.market_store import MarketStoreService
+from app.services.paper.held_option_contract_resolution import HeldOptionContractResolution
 from app.services.paper.paper_valuation import compute_open_position_valuation
 from app.services.paper.strategy_one_exit_evaluator import ExitEvaluationInput, evaluate_strategy_one_open_exit_readonly
 
@@ -41,8 +43,11 @@ def build_position_monitor_row(
     context_summary: ContextSummaryResponse,
     market_status: MarketStatusResponse,
     evaluation_timestamp: datetime,
+    held_resolution: HeldOptionContractResolution | None = None,
 ) -> StrategyOnePositionMonitorRow:
-    valuation = compute_open_position_valuation(row, chain, settings)
+    valuation = compute_open_position_valuation(
+        row, chain, settings, now=evaluation_timestamp, held_resolution=held_resolution
+    )
     exit_eval = evaluate_strategy_one_open_exit_readonly(
         ExitEvaluationInput(
             position=row,
@@ -81,22 +86,28 @@ def build_open_positions_monitor(
     context_summary: ContextSummaryResponse,
     market_status: MarketStatusResponse,
     evaluation_timestamp: datetime | None = None,
+    market: MarketStoreService | None = None,
 ) -> StrategyOneOpenPositionsMonitorResponse:
     clock = evaluation_timestamp or datetime.now(timezone.utc)
     if clock.tzinfo is None:
         clock = clock.replace(tzinfo=timezone.utc)
-    positions = [
-        build_position_monitor_row(
-            r,
-            chain=chain,
-            settings=settings,
-            context_status=context_status,
-            context_summary=context_summary,
-            market_status=market_status,
-            evaluation_timestamp=clock,
+    positions: list[StrategyOnePositionMonitorRow] = []
+    for r in rows:
+        held: HeldOptionContractResolution | None = None
+        if market is not None:
+            held = market.resolve_open_paper_option_contract(option_symbol=r.option_symbol, chain=chain)
+        positions.append(
+            build_position_monitor_row(
+                r,
+                chain=chain,
+                settings=settings,
+                context_status=context_status,
+                context_summary=context_summary,
+                market_status=market_status,
+                evaluation_timestamp=clock,
+                held_resolution=held,
+            )
         )
-        for r in rows
-    ]
     return StrategyOneOpenPositionsMonitorResponse(
         evaluation_timestamp=clock,
         context_status=context_status,
@@ -115,10 +126,14 @@ def build_single_open_position_monitor(
     context_summary: ContextSummaryResponse,
     market_status: MarketStatusResponse,
     evaluation_timestamp: datetime | None = None,
+    market: MarketStoreService | None = None,
 ) -> StrategyOneOpenPositionMonitorResponse:
     clock = evaluation_timestamp or datetime.now(timezone.utc)
     if clock.tzinfo is None:
         clock = clock.replace(tzinfo=timezone.utc)
+    held: HeldOptionContractResolution | None = None
+    if market is not None:
+        held = market.resolve_open_paper_option_contract(option_symbol=row.option_symbol, chain=chain)
     pos = build_position_monitor_row(
         row,
         chain=chain,
@@ -127,6 +142,7 @@ def build_single_open_position_monitor(
         context_summary=context_summary,
         market_status=market_status,
         evaluation_timestamp=clock,
+        held_resolution=held,
     )
     return StrategyOneOpenPositionMonitorResponse(
         evaluation_timestamp=clock,

@@ -326,6 +326,30 @@ export function humanizeMonitorState(state: string | null | undefined): string {
   return MONITOR_STATE[state] ?? snakeToTitleCase(state);
 }
 
+const QUOTE_BLOCKER: Record<string, string> = {
+  option_contract_not_in_near_atm_chain_snapshot: "Held contract not in near-ATM chain snapshot (direct quote may apply)",
+  stale_option_quote_for_open_position: "Option quote is too old for this leg",
+  invalid_bid_ask_for_open_position: "Bid/ask missing or invalid for this leg",
+  missing_option_quote_for_open_position: "No usable option quote for this leg",
+};
+
+export function humanizeQuoteBlockerCode(code: string | null | undefined): string {
+  if (code == null || code === "") return "—";
+  return QUOTE_BLOCKER[code] ?? snakeToTitleCase(code);
+}
+
+const EXIT_REASON: Record<string, string> = {
+  manual_emergency_close_at_market_bid: "Emergency close at option bid",
+  manual_emergency_close_unquoted: "Emergency close (no quote — synthetic $0)",
+  strategy_1_auto_exit_close_now: "Strategy 1 auto exit",
+  emergency_manual_override: "Emergency close now (quoted)",
+};
+
+export function humanizeExitReason(reason: string | null | undefined): string {
+  if (reason == null || reason === "") return "—";
+  return EXIT_REASON[reason] ?? snakeToTitleCase(reason);
+}
+
 export function humanizeLimitation(line: string): string {
   const low = line.toLowerCase();
   if (low.includes("mvp")) return "Chart uses a minimal estimate, not full history.";

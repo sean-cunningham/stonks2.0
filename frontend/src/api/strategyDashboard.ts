@@ -80,8 +80,20 @@ export function closeNow(symbol: string, strategyId: string, paperTradeId: numbe
   return apiRequest(`${routeBase(symbol, strategyId)}/positions/${paperTradeId}/close-now`, { method: "POST" });
 }
 
+/** Strategy 1 paper: force-close at $0 when the held contract cannot be quoted. */
+export function emergencyCloseUnquoted(symbol: string, strategyId: string, paperTradeId: number): Promise<unknown> {
+  return apiRequest(
+    `${routeBase(symbol, strategyId)}/positions/${paperTradeId}/emergency-close-unquoted`,
+    { method: "POST" }
+  );
+}
+
 export function setPauseAll(paused: boolean): Promise<PauseAllRuntimeResponse> {
   return apiRequest<PauseAllRuntimeResponse>(`/paper/runtime/${paused ? "pause-all" : "resume-all"}`, {
     method: "POST",
   });
+}
+
+export function resetDashboardStats(symbol: string, strategyId: string): Promise<unknown> {
+  return apiRequest(`${routeBase(symbol, strategyId)}/dashboard/reset`, { method: "POST" });
 }

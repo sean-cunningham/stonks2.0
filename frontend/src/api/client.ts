@@ -12,7 +12,16 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
 
   if (!res.ok) {
     const msg = await res.text();
-    throw new Error(`${res.status} ${res.statusText}: ${msg}`);
+    let detailLine = msg;
+    try {
+      const parsed = JSON.parse(msg) as { detail?: { code?: string } | string };
+      if (parsed?.detail && typeof parsed.detail === "object" && parsed.detail.code) {
+        detailLine = parsed.detail.code;
+      }
+    } catch {
+      /* keep raw body */
+    }
+    throw new Error(`${res.status} ${res.statusText}: ${detailLine}`);
   }
 
   return (await res.json()) as T;

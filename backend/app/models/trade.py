@@ -56,3 +56,20 @@ class PaperTradeEvent(Base):
     event_type: Mapped[str] = mapped_column(String(16), index=True)
     details_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StrategyDashboardBaseline(Base):
+    """Per-strategy dashboard reset anchor for stats/charts while preserving full trade history."""
+
+    __tablename__ = "strategy_dashboard_baselines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    strategy_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    reset_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    baseline_cash: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

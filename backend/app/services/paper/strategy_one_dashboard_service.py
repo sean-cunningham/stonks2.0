@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.repositories.paper_trade_repository import PaperTradeRepository
+from app.repositories.strategy_dashboard_baseline_repository import StrategyDashboardBaselineRepository
 from app.repositories.strategy_runtime_repository import StrategyRuntimeRepository
 from app.schemas.strategy_dashboard import (
     StrategyClosedTradeCard,
@@ -19,6 +20,7 @@ from app.schemas.strategy_dashboard import (
     StrategyIdentity,
     StrategyOpenPositionCard,
     StrategyRuntimeView,
+    StrategyStatsBaselineView,
 )
 from app.services.market.context_service import ContextService
 from app.services.market.market_store import MarketStoreService
@@ -26,6 +28,8 @@ from app.services.paper.paper_trade_service import PaperTradeService
 from app.services.paper.paper_valuation import compute_open_position_valuation
 from app.services.paper.strategy_dashboard_service import (
     build_mvp_timeseries,
+    closed_trade_purchase_and_sale_usd,
+    compute_current_cash,
     compute_headline_metrics,
     compute_max_drawdown_from_curve,
 )
@@ -70,6 +74,34 @@ def _extract_affordability_details(notes_summary: str | None) -> dict[str, str] 
     return out or None
 
 
+def _entry_underlying_from_evaluation_snap(row) -> float | None:
+    if row is None:
+        return None
+    snap = getattr(row, "evaluation_snapshot_json", None)
+    if not isinstance(snap, dict):
+        return None
+    lp = snap.get("latest_price")
+    if isinstance(lp, (int, float)):
+        return float(lp)
+    return None
+
+
+def _pct_and_levels(*, entry_price: float, mark_price: float | None, exit_policy: dict | None) -> tuple[float | None, float | None, float | None]:
+    if entry_price <= 0:
+        return None, None, None
+    pnl_pct = ((float(mark_price) - entry_price) / entry_price) if mark_price is not None else None
+    stop_pct_raw = None
+    take_profit_pct_raw = None
+    if isinstance(exit_policy, dict):
+        stop_pct_raw = exit_policy.get("premium_fail_safe_stop_pct") or exit_policy.get("hard_stop_pct")
+        take_profit_pct_raw = exit_policy.get("profit_target_pct") or exit_policy.get("take_profit_pct")
+    stop_pct = float(stop_pct_raw) if isinstance(stop_pct_raw, (int, float)) else None
+    take_profit_pct = float(take_profit_pct_raw) if isinstance(take_profit_pct_raw, (int, float)) else None
+    stop_price = entry_price * (1.0 - stop_pct) if stop_pct is not None else None
+    take_profit_price = entry_price * (1.0 + take_profit_pct) if take_profit_pct is not None else None
+    return pnl_pct, stop_price, take_profit_price
+
+
 def build_strategy_one_dashboard(
     db: Session,
     *,
@@ -83,6 +115,9 @@ def build_strategy_one_dashboard(
     strategy_id = PaperTradeService.STRATEGY_ID
 
     runtime = get_strategy_one_runtime_coordinator().get_status(db, settings=settings)
+    baseline_repo = StrategyDashboardBaselineRepository(db)
+    baseline = baseline_repo.get_for_strategy(strategy_id=strategy_id)
+    scope_start = baseline.reset_at if baseline is not None else None
     open_rows = paper_repo.list_open(strategy_id=strategy_id)
     closed_recent = paper_repo.list_closed(strategy_id=strategy_id, limit=20)
     closed_chrono = paper_repo.list_closed_chronological(strategy_id=strategy_id, limit=1000)
@@ -102,18 +137,28 @@ def build_strategy_one_dashboard(
         context_summary=summary,
         market_status=mstatus,
         evaluation_timestamp=as_of,
+        market=market,
     )
 
     open_cards: list[StrategyOpenPositionCard] = []
     unrealized_total = 0.0
     valuation_errors = 0
     for p in monitor.positions:
+        if scope_start is not None and p.entry_time < scope_start:
+            continue
         u = p.valuation.unrealized_pnl_bid_basis
         if u is not None:
             unrealized_total += float(u)
         if p.valuation.valuation_error:
             valuation_errors += 1
         mark_price = p.valuation.current_mid if p.valuation.current_mid is not None else p.valuation.current_bid
+        pnl_pct, stop_price, take_profit_price = _pct_and_levels(
+            entry_price=float(p.entry_price),
+            mark_price=mark_price,
+            exit_policy=p.valuation.exit_policy,
+        )
+        exit_blockers = list(p.exit_evaluation.blockers) if p.exit_evaluation.blockers else []
+        match_row = next((r for r in open_rows if int(r.id) == p.paper_trade_id), None)
         open_cards.append(
             StrategyOpenPositionCard(
                 paper_trade_id=p.paper_trade_id,
@@ -125,26 +170,42 @@ def build_strategy_one_dashboard(
                 entry_price=p.entry_price,
                 mark_price=mark_price,
                 unrealized_pnl=u,
+                unrealized_pnl_pct=pnl_pct,
+                stop_price=stop_price,
+                take_profit_price=take_profit_price,
                 quote_is_fresh=p.valuation.quote_is_fresh,
                 exit_actionable=p.valuation.exit_actionable,
                 monitor_state=p.monitor_state,
+                current_bid=p.valuation.current_bid,
+                current_ask=p.valuation.current_ask,
+                quote_timestamp=p.valuation.quote_timestamp_used,
+                quote_resolution_source=p.valuation.quote_resolution_source,
+                quote_blocker_code=p.valuation.quote_blocker_code,
+                exit_blocked_reasons=exit_blockers,
+                entry_underlying_price=_entry_underlying_from_evaluation_snap(match_row),
             )
         )
 
-    closed_cards = [
-        StrategyClosedTradeCard(
-            paper_trade_id=int(r.id),
-            symbol=r.symbol,
-            option_symbol=r.option_symbol,
-            side=r.side,
-            quantity=int(r.quantity),
-            entry_time=r.entry_time,
-            exit_time=r.exit_time,
-            realized_pnl=float(r.realized_pnl) if r.realized_pnl is not None else None,
-            exit_reason=r.exit_reason,
+    closed_cards = []
+    for r in closed_recent:
+        if scope_start is not None and (r.exit_time is None or r.exit_time < scope_start):
+            continue
+        purchase_usd, sale_usd = closed_trade_purchase_and_sale_usd(r)
+        closed_cards.append(
+            StrategyClosedTradeCard(
+                paper_trade_id=int(r.id),
+                symbol=r.symbol,
+                option_symbol=r.option_symbol,
+                side=r.side,
+                quantity=int(r.quantity),
+                entry_time=r.entry_time,
+                exit_time=r.exit_time,
+                realized_pnl=float(r.realized_pnl) if r.realized_pnl is not None else None,
+                exit_reason=r.exit_reason,
+                total_purchase_price_usd=purchase_usd,
+                total_sale_price_usd=sale_usd,
+            )
         )
-        for r in closed_recent
-    ]
     cycle_cards = [
         StrategyCycleHistoryRow(
             started_at=r.started_at,
@@ -186,12 +247,36 @@ def build_strategy_one_dashboard(
     eval_now, _, _ = build_strategy_one_evaluation_bundle(context, market, settings)
     candidate_blocked = eval_now.decision in ("candidate_call", "candidate_put") and auto_open_failure_count > 0
 
-    metrics = compute_headline_metrics(closed=closed_chrono, unrealized_pnl=unrealized_total, open_count=len(open_rows))
-    starting_cash = float(settings.PAPER_STRATEGY1_ACCOUNT_EQUITY_USD)
-    open_cost_basis = sum(float(r.entry_price) * int(r.quantity) * 100.0 for r in open_rows)
-    metrics.current_cash = starting_cash + float(metrics.realized_pnl) - open_cost_basis
+    scoped_open_rows = open_rows if scope_start is None else [r for r in open_rows if r.entry_time >= scope_start]
+    scoped_closed_chrono = (
+        closed_chrono
+        if scope_start is None
+        else [r for r in closed_chrono if r.exit_time is not None and r.exit_time >= scope_start]
+    )
+    opened_trade_count = (
+        len(open_rows) + len(closed_chrono)
+        if scope_start is None
+        else sum(1 for r in open_rows if r.entry_time >= scope_start)
+        + sum(1 for r in closed_chrono if r.entry_time >= scope_start)
+    )
+    starting_cash = (
+        float(baseline.baseline_cash)
+        if baseline is not None
+        else float(settings.PAPER_STRATEGY1_ACCOUNT_EQUITY_USD)
+    )
+    metrics = compute_headline_metrics(
+        closed=scoped_closed_chrono,
+        unrealized_pnl=unrealized_total,
+        open_count=len(scoped_open_rows),
+        opened_trade_count=opened_trade_count,
+    )
+    metrics.current_cash = compute_current_cash(
+        starting_cash=starting_cash,
+        open_rows=scoped_open_rows,
+        closed_rows=scoped_closed_chrono,
+    )
     timeseries = build_mvp_timeseries(
-        closed_chronological=closed_chrono,
+        closed_chronological=scoped_closed_chrono,
         current_unrealized_pnl=unrealized_total,
         starting_cash=starting_cash,
         current_cash=float(metrics.current_cash or 0.0),
@@ -200,6 +285,8 @@ def build_strategy_one_dashboard(
     metrics.max_drawdown = compute_max_drawdown_from_curve(timeseries.equity_or_value)
     if valuation_errors > 0:
         timeseries.limitations.append("some open-position valuations were non-actionable; unrealized_pnl may be conservative")
+    if baseline is not None:
+        timeseries.limitations.append("dashboard stats/charts are scoped from the latest manual reset baseline")
 
     state_counts: dict[str, int] = {}
     for p in monitor.positions:
@@ -245,6 +332,14 @@ def build_strategy_one_dashboard(
             current_near_miss_explanation=eval_now.diagnostics.explanation if eval_now.diagnostics else None,
             recent_affordability_failure_count=affordability_failure_count,
             latest_affordability_diagnostics=latest_affordability_details,
+        ),
+        stats_baseline=(
+            StrategyStatsBaselineView(
+                reset_at=baseline.reset_at,
+                baseline_cash=float(baseline.baseline_cash),
+            )
+            if baseline is not None
+            else None
         ),
         headline_metrics=metrics,
         open_positions=open_cards,

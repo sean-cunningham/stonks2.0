@@ -36,6 +36,12 @@ class StrategyControlsView(BaseModel):
     can_toggle_entry: bool = True
     can_toggle_exit: bool = True
     emergency_close_supported: bool = True
+    can_reset_stats: bool = True
+
+
+class StrategyStatsBaselineView(BaseModel):
+    reset_at: datetime
+    baseline_cash: float
 
 
 class StrategyHeadlineMetrics(BaseModel):
@@ -62,9 +68,19 @@ class StrategyOpenPositionCard(BaseModel):
     entry_price: float
     mark_price: float | None = None
     unrealized_pnl: float | None = None
+    unrealized_pnl_pct: float | None = None
+    stop_price: float | None = None
+    take_profit_price: float | None = None
     quote_is_fresh: bool = False
     exit_actionable: bool = False
     monitor_state: str | None = None
+    current_bid: float | None = None
+    current_ask: float | None = None
+    quote_timestamp: datetime | None = None
+    quote_resolution_source: str | None = None
+    quote_blocker_code: str | None = None
+    exit_blocked_reasons: list[str] = Field(default_factory=list)
+    entry_underlying_price: float | None = None
 
 
 class StrategyClosedTradeCard(BaseModel):
@@ -77,6 +93,14 @@ class StrategyClosedTradeCard(BaseModel):
     exit_time: datetime | None = None
     realized_pnl: float | None = None
     exit_reason: str | None = None
+    total_purchase_price_usd: float | None = Field(
+        default=None,
+        description="Notional paid at open: entry_price_per_share × contract multiplier × quantity.",
+    )
+    total_sale_price_usd: float | None = Field(
+        default=None,
+        description="Notional received at close: exit_price_per_share × contract multiplier × quantity.",
+    )
 
 
 class StrategyCycleHistoryRow(BaseModel):
@@ -131,6 +155,7 @@ class StrategyDashboardResponse(BaseModel):
     controls: StrategyControlsView
     current_signal: StrategyCurrentSignal | None = None
     cycle_summary: StrategyCycleSummary | None = None
+    stats_baseline: StrategyStatsBaselineView | None = None
     headline_metrics: StrategyHeadlineMetrics
     open_positions: list[StrategyOpenPositionCard] = Field(default_factory=list)
     recent_closed_trades: list[StrategyClosedTradeCard] = Field(default_factory=list)

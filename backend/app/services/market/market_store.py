@@ -18,6 +18,10 @@ from app.services.broker.tastytrade_market_data import (
     UnderlyingQuoteNormalized,
 )
 from app.services.market.market_status import compute_market_readiness
+from app.services.paper.held_option_contract_resolution import (
+    HeldOptionContractResolution,
+    build_near_atm_contract_for_held_direct_quote,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +200,41 @@ class MarketStoreService:
             quote_timestamp=snapshot.snapshot_time,
             source_status=snapshot.data_source_status,
         )
+
+    @staticmethod
+    def _pick_option_quote_map_entry(
+        requested: str, quote_map: dict[str, dict[str, float | str | None]]
+    ) -> dict[str, float | str | None] | None:
+        """Match DXLink ``eventSymbol`` keys to the requested OCC/streamer string (spacing may differ)."""
+        return TastytradeMarketDataService.pick_quote_map_entry(requested, quote_map)
+
+    def resolve_open_paper_option_contract(
+        self,
+        *,
+        option_symbol: str,
+        chain: ChainLatestResponse,
+    ) -> HeldOptionContractResolution | None:
+        """Resolve bid/ask for an open leg: prefer chain near-ATM row, else direct DXLink for exact symbol."""
+        if chain.available and chain.option_quotes_available:
+            for c in chain.near_atm_contracts:
+                if c.option_symbol == option_symbol:
+                    ts = chain.snapshot_timestamp or datetime.now(timezone.utc)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    return HeldOptionContractResolution(contract=c, quote_timestamp=ts, source="chain_near_atm")
+        try:
+            _, quote_map = self._market_data.fetch_direct_option_quotes([option_symbol])
+            raw = self._pick_option_quote_map_entry(option_symbol, quote_map)
+            if raw is None:
+                return None
+            bid = TastytradeMarketDataService._to_float(raw.get("bid"))
+            ask = TastytradeMarketDataService._to_float(raw.get("ask"))
+            c = build_near_atm_contract_for_held_direct_quote(option_symbol, bid=bid, ask=ask)
+            ts = datetime.now(timezone.utc)
+            return HeldOptionContractResolution(contract=c, quote_timestamp=ts, source="direct_dxlink")
+        except (BrokerAuthError, MarketDataError, OSError, RuntimeError) as exc:
+            logger.warning("Direct option quote fetch failed symbol=%s err=%s", option_symbol, exc)
+            return None
 
     def get_latest_chain(self) -> ChainLatestResponse:
         """Return latest normalized chain summary or degraded unavailable response."""

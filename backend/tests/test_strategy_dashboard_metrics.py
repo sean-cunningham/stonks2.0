@@ -4,7 +4,10 @@ import unittest
 from datetime import datetime, timezone
 
 from app.models.trade import PaperTrade
-from app.services.paper.strategy_dashboard_service import compute_headline_metrics
+from app.services.paper.strategy_dashboard_service import (
+    closed_trade_purchase_and_sale_usd,
+    compute_headline_metrics,
+)
 
 
 def _closed_trade(pnl: float) -> PaperTrade:
@@ -52,3 +55,9 @@ class StrategyDashboardMetricsTests(unittest.TestCase):
         self.assertIsNone(m.avg_win)
         self.assertIsNone(m.avg_loss)
         self.assertIsNone(m.expectancy)
+
+    def test_closed_trade_purchase_and_sale_usd(self) -> None:
+        row = _closed_trade(10.0)
+        purchase, sale = closed_trade_purchase_and_sale_usd(row)
+        self.assertAlmostEqual(purchase or 0.0, 100.0)
+        self.assertAlmostEqual(sale or 0.0, 110.0)

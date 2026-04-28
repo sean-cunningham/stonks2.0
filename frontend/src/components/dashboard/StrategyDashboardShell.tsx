@@ -22,7 +22,10 @@ type Props = {
   onPauseAllToggle: () => void;
   onEntryToggle: () => void;
   onExitToggle: () => void;
+  onResetStats: () => void;
   onCloseNow: (paperTradeId: number, optionSymbol: string) => void;
+  showPaperEmergencyUnquoted?: boolean;
+  onEmergencyCloseUnquoted?: (paperTradeId: number, optionSymbol: string) => void;
 };
 
 export default function StrategyDashboardShell({
@@ -35,7 +38,10 @@ export default function StrategyDashboardShell({
   onPauseAllToggle,
   onEntryToggle,
   onExitToggle,
+  onResetStats,
   onCloseNow,
+  showPaperEmergencyUnquoted = false,
+  onEmergencyCloseUnquoted,
 }: Props) {
   return (
     <main className="page">
@@ -74,6 +80,7 @@ export default function StrategyDashboardShell({
         onPauseAllToggle={onPauseAllToggle}
         onEntryToggle={onEntryToggle}
         onExitToggle={onExitToggle}
+        onResetStats={onResetStats}
       />
 
       <HeadlineMetricsCards metrics={vm.metrics} />
@@ -86,8 +93,10 @@ export default function StrategyDashboardShell({
       <OpenPositionsTable
         rows={vm.openPositions}
         emergencyCloseSupported={vm.controls.emergency_close_supported}
+        showPaperEmergencyUnquoted={showPaperEmergencyUnquoted}
         disableActions={actionBusy}
         onCloseNow={onCloseNow}
+        onEmergencyCloseUnquoted={onEmergencyCloseUnquoted}
       />
       <ClosedTradesTable rows={vm.closedTrades} />
       <CycleHistoryTable rows={vm.cycleHistory} />

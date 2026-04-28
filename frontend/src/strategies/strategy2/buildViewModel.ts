@@ -10,6 +10,7 @@ export function buildStrategy2ViewModel(payload: DashboardResponse): StrategyDas
     controls: payload.controls,
     currentSignal: payload.current_signal ?? null,
     cycleSummary: payload.cycle_summary ?? null,
+    statsBaseline: payload.stats_baseline ?? null,
     metrics: payload.headline_metrics,
     equitySeries: payload.timeseries.equity_or_value,
     equityReturnSeries: payload.timeseries.equity_return_pct ?? [],
