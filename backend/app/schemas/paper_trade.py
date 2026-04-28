@@ -34,6 +34,10 @@ class PaperTradeResponse(BaseModel):
     realized_pnl: float | None = None
     exit_policy: dict[str, Any] | None = None
     sizing_policy: dict[str, Any] | None = None
+    active_stop_price: float | None = None
+    take_profit_price: float | None = None
+    max_unrealized_pnl_percent: float | None = None
+    profit_lock_stage: str | None = None
 
 
 class PaperTradeEventResponse(BaseModel):

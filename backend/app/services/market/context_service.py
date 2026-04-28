@@ -84,6 +84,11 @@ class ContextService:
             stale_5m_reference_time=readiness.stale_5m_reference_time,
             stale_5m_seconds=readiness.stale_5m_seconds,
             stale_5m_boolean=readiness.stale_5m_boolean,
+            completed_5m_bar_count=readiness.completed_5m_bar_count,
+            context_session_mode=readiness.context_session_mode,
+            early_session_ready=readiness.early_session_ready,
+            mature_session_ready=readiness.mature_session_ready,
+            atr_mode=readiness.atr_mode,
             source_status="ok" if analysis_ok else "degraded",
             bars_source=source,
         )
@@ -185,6 +190,11 @@ class ContextService:
             context_ready=readiness.context_ready,
             block_reason=readiness.block_reason,
             block_reason_analysis=readiness.block_reason_analysis,
+            completed_5m_bar_count=readiness.completed_5m_bar_count,
+            context_session_mode=readiness.context_session_mode,
+            early_session_ready=readiness.early_session_ready,
+            mature_session_ready=readiness.mature_session_ready,
+            atr_mode=readiness.atr_mode,
             source_status="ok" if analysis_ok else "degraded",
             bars_source=source,
         )

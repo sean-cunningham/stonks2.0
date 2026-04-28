@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from typing import Literal
 
 from app.core.config import Settings
 from app.models.bars import IntradayBar
@@ -84,6 +85,11 @@ class ContextReadiness:
     stale_5m_reference_time: datetime | None = None
     stale_5m_seconds: float | None = None
     stale_5m_boolean: bool = False
+    completed_5m_bar_count: int = 0
+    context_session_mode: Literal["none", "early", "mature"] = "none"
+    early_session_ready: bool = False
+    mature_session_ready: bool = False
+    atr_mode: Literal["none", "early_available_bars", "atr14"] = "none"
 
 
 def _metrics_reason_and_flags(
@@ -94,30 +100,33 @@ def _metrics_reason_and_flags(
     latest_5m: datetime | None,
     settings: Settings,
     current: datetime,
-) -> tuple[str, bool, bool, bool, bool, bool]:
+) -> tuple[str, bool, bool, bool, bool, bool, int, str, bool, bool, str]:
     """
-    Returns (analysis_block_reason, bars_1m_ok, bars_5m_ok, vwap_ok, or_ok, atr_ok).
+    Returns:
+      (analysis_block_reason, bars_1m_ok, bars_5m_ok, vwap_ok, or_ok, atr_ok,
+       completed_5m_count, context_session_mode, early_session_ready,
+       mature_session_ready, atr_mode).
 
     analysis_block_reason is 'none' when analysis metrics are computable on the anchor session.
     """
     if not b1:
-        return "bars_not_initialized", False, bool(b5), False, False, False
+        return "bars_not_initialized", False, bool(b5), False, False, False, 0, "none", False, False, "none"
     if not b5:
-        return "insufficient_5m_bars", True, False, False, False, False
+        return "insufficient_5m_bars", True, False, False, False, False, 0, "none", False, False, "none"
 
     anchor = latest_1m or latest_5m
     if anchor is None:
-        return "bars_not_initialized", False, False, False, False, False
+        return "bars_not_initialized", False, False, False, False, False, 0, "none", False, False, "none"
 
     session_day = context_calculator.session_date_et(anchor)
     rth_1m = context_calculator.filter_rth_bars_on_session_day(b1, session_day)
     rth_5m = context_calculator.filter_rth_bars_on_session_day(b5, session_day)
 
     if not rth_1m or not rth_5m:
-        return "insufficient_1m_bars", True, True, False, False, False
+        return "insufficient_1m_bars", True, True, False, False, False, 0, "none", False, False, "none"
 
     if len(rth_1m) < 5:
-        return "insufficient_1m_bars", True, True, False, False, False
+        return "insufficient_1m_bars", True, True, False, False, False, 0, "none", False, False, "none"
 
     vwap_ok = context_calculator.compute_session_vwap(rth_1m) is not None
     orh, orl = context_calculator.compute_opening_range(
@@ -127,15 +136,30 @@ def _metrics_reason_and_flags(
     or_ok = orh is not None and orl is not None
 
     completed_5m = context_calculator.completed_5m_bars(rth_5m, current)
+    completed_5m_count = len(completed_5m)
+    early_atr_ok = context_calculator.compute_atr_early_available_bars(completed_5m) is not None
     atr_ok = context_calculator.compute_atr14_wilder(completed_5m) is not None
     swing_ok = context_calculator.compute_recent_swings(completed_5m)[0] is not None
+    early_ready = bool(vwap_ok and or_ok and swing_ok and early_atr_ok and completed_5m_count >= 6)
+    mature_ready = bool(vwap_ok and or_ok and atr_ok and swing_ok and completed_5m_count >= 15)
+    if completed_5m_count >= 15:
+        session_mode = "mature"
+        atr_mode = "atr14"
+    elif completed_5m_count >= 6:
+        session_mode = "early"
+        atr_mode = "early_available_bars" if early_atr_ok else "none"
+    else:
+        session_mode = "none"
+        atr_mode = "none"
 
     if not vwap_ok:
         reason = "insufficient_1m_bars"
     elif not or_ok:
         reason = "insufficient_5m_bars"
-    elif len(completed_5m) < 15:
+    elif completed_5m_count < 6:
         reason = "insufficient_5m_bars"
+    elif completed_5m_count < 15:
+        reason = "none" if early_ready else "insufficient_5m_bars"
     elif not atr_ok:
         reason = "insufficient_5m_bars"
     elif not swing_ok:
@@ -143,7 +167,19 @@ def _metrics_reason_and_flags(
     else:
         reason = "none"
 
-    return reason, True, True, vwap_ok, or_ok, atr_ok
+    return (
+        reason,
+        True,
+        True,
+        vwap_ok,
+        or_ok,
+        atr_ok,
+        completed_5m_count,
+        session_mode,
+        early_ready,
+        mature_ready,
+        atr_mode,
+    )
 
 
 def evaluate_context_readiness(
@@ -181,6 +217,11 @@ def evaluate_context_readiness(
         stale_ref: datetime | None = None,
         stale_seconds: float | None = None,
         stale_flag: bool = False,
+        completed_5m_count: int = 0,
+        session_mode: Literal["none", "early", "mature"] = "none",
+        early_ready: bool = False,
+        mature_ready: bool = False,
+        atr_mode: Literal["none", "early_available_bars", "atr14"] = "none",
     ) -> ContextReadiness:
         return ContextReadiness(
             us_equity_rth_open=rth_open,
@@ -205,6 +246,11 @@ def evaluate_context_readiness(
             stale_5m_reference_time=stale_ref,
             stale_5m_seconds=stale_seconds,
             stale_5m_boolean=stale_flag,
+            completed_5m_bar_count=completed_5m_count,
+            context_session_mode=session_mode,
+            early_session_ready=early_ready,
+            mature_session_ready=mature_ready,
+            atr_mode=atr_mode,
         )
 
     b1 = _dxlink_bars_only(bars_1m)
@@ -213,6 +259,45 @@ def evaluate_context_readiness(
     latest_1m = _as_utc_aware(b1[-1].bar_time) if b1 else None
     latest_5m = _as_utc_aware(b5[-1].bar_time) if b5 else None
     latest_session = context_calculator.session_date_et(latest_1m) if latest_1m else None
+    completed_5m_count_snapshot = 0
+    session_mode_snapshot: Literal["none", "early", "mature"] = "none"
+    early_ready_snapshot = False
+    mature_ready_snapshot = False
+    atr_mode_snapshot: Literal["none", "early_available_bars", "atr14"] = "none"
+    if latest_session is not None:
+        rth_1m_snapshot = context_calculator.filter_rth_bars_on_session_day(b1, latest_session)
+        rth_5m_snapshot = context_calculator.filter_rth_bars_on_session_day(b5, latest_session)
+        completed_5m_snapshot = context_calculator.completed_5m_bars(rth_5m_snapshot, current)
+        completed_5m_count_snapshot = len(completed_5m_snapshot)
+        vwap_snapshot_ok = bool(rth_1m_snapshot) and context_calculator.compute_session_vwap(rth_1m_snapshot) is not None
+        orh_snapshot, orl_snapshot = context_calculator.compute_opening_range(
+            rth_5m_snapshot,
+            opening_range_minutes=settings.OPENING_RANGE_MINUTES,
+        )
+        or_snapshot_ok = orh_snapshot is not None and orl_snapshot is not None
+        atr_early_snapshot_ok = context_calculator.compute_atr_early_available_bars(completed_5m_snapshot) is not None
+        atr14_snapshot_ok = context_calculator.compute_atr14_wilder(completed_5m_snapshot) is not None
+        swing_snapshot_ok = context_calculator.compute_recent_swings(completed_5m_snapshot)[0] is not None
+        early_ready_snapshot = bool(
+            completed_5m_count_snapshot >= 6
+            and vwap_snapshot_ok
+            and or_snapshot_ok
+            and atr_early_snapshot_ok
+            and swing_snapshot_ok
+        )
+        mature_ready_snapshot = bool(
+            completed_5m_count_snapshot >= 15
+            and vwap_snapshot_ok
+            and or_snapshot_ok
+            and atr14_snapshot_ok
+            and swing_snapshot_ok
+        )
+        if completed_5m_count_snapshot >= 15:
+            session_mode_snapshot = "mature"
+            atr_mode_snapshot = "atr14"
+        elif completed_5m_count_snapshot >= 6:
+            session_mode_snapshot = "early"
+            atr_mode_snapshot = "early_available_bars" if atr_early_snapshot_ok else "none"
 
     # If we have no persisted DXLink bars at all, report connectivity first when disconnected.
     if not b1 and not b5 and not (dxlink.connected and dxlink.subscribed):
@@ -233,6 +318,11 @@ def evaluate_context_readiness(
             stale_1m_ref=None,
             stale_1m_secs=None,
             stale_1m_flag=False,
+            completed_5m_count=completed_5m_count_snapshot,
+            session_mode=session_mode_snapshot,
+            early_ready=early_ready_snapshot,
+            mature_ready=mature_ready_snapshot,
+            atr_mode=atr_mode_snapshot,
         )
 
     age_1m = (current - latest_1m).total_seconds() if latest_1m else None
@@ -281,6 +371,11 @@ def evaluate_context_readiness(
             stale_ref=stale_5m_ref,
             stale_seconds=stale_5m_seconds,
             stale_flag=stale_5m,
+            completed_5m_count=completed_5m_count_snapshot,
+            session_mode=session_mode_snapshot,
+            early_ready=early_ready_snapshot,
+            mature_ready=mature_ready_snapshot,
+            atr_mode=atr_mode_snapshot,
         )
     if rth_open and stale_5m:
         return _readiness(
@@ -304,9 +399,26 @@ def evaluate_context_readiness(
             stale_ref=stale_5m_ref,
             stale_seconds=stale_5m_seconds,
             stale_flag=stale_5m,
+            completed_5m_count=completed_5m_count_snapshot,
+            session_mode=session_mode_snapshot,
+            early_ready=early_ready_snapshot,
+            mature_ready=mature_ready_snapshot,
+            atr_mode=atr_mode_snapshot,
         )
 
-    ar_reason, b1a, b5a, vwap_ok, or_ok, atr_ok = _metrics_reason_and_flags(
+    (
+        ar_reason,
+        b1a,
+        b5a,
+        vwap_ok,
+        or_ok,
+        atr_ok,
+        completed_5m_count,
+        session_mode,
+        early_ready,
+        mature_ready,
+        atr_mode,
+    ) = _metrics_reason_and_flags(
         b1=b1,
         b5=b5,
         latest_1m=latest_1m,
@@ -354,6 +466,11 @@ def evaluate_context_readiness(
             stale_ref=stale_5m_ref,
             stale_seconds=stale_5m_seconds,
             stale_flag=stale_5m,
+            completed_5m_count=completed_5m_count,
+            session_mode=session_mode,
+            early_ready=early_ready,
+            mature_ready=mature_ready,
+            atr_mode=atr_mode,
         )
 
     if not rth_open:
@@ -378,6 +495,11 @@ def evaluate_context_readiness(
             stale_ref=stale_5m_ref,
             stale_seconds=stale_5m_seconds,
             stale_flag=stale_5m,
+            completed_5m_count=completed_5m_count,
+            session_mode=session_mode,
+            early_ready=early_ready,
+            mature_ready=mature_ready,
+            atr_mode=atr_mode,
         )
 
     return _readiness(
@@ -401,4 +523,9 @@ def evaluate_context_readiness(
         stale_ref=stale_5m_ref,
         stale_seconds=stale_5m_seconds,
         stale_flag=stale_5m,
+        completed_5m_count=completed_5m_count,
+        session_mode=session_mode,
+        early_ready=early_ready,
+        mature_ready=mature_ready,
+        atr_mode=atr_mode,
     )

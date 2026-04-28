@@ -81,6 +81,8 @@ class StrategyOpenPositionCard(BaseModel):
     quote_blocker_code: str | None = None
     exit_blocked_reasons: list[str] = Field(default_factory=list)
     entry_underlying_price: float | None = None
+    max_unrealized_pnl_percent: float | None = None
+    profit_lock_stage: str | None = None
 
 
 class StrategyClosedTradeCard(BaseModel):

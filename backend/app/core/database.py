@@ -98,6 +98,10 @@ def ensure_paper_trade_schema() -> None:
                 "entry_evaluation_fingerprint": "VARCHAR(256) DEFAULT ''",
                 "exit_policy": "JSON",
                 "sizing_policy": "JSON",
+                "active_stop_price": "FLOAT",
+                "take_profit_price": "FLOAT",
+                "max_unrealized_pnl_percent": "FLOAT",
+                "profit_lock_stage": "VARCHAR(32) DEFAULT 'none'",
             }
             for column, ddl_type in expected_columns.items():
                 if column not in existing:
@@ -122,6 +126,10 @@ def ensure_paper_trade_schema() -> None:
             expected_columns: dict[str, str] = {
                 "exit_policy": "JSONB",
                 "sizing_policy": "JSONB",
+                "active_stop_price": "DOUBLE PRECISION",
+                "take_profit_price": "DOUBLE PRECISION",
+                "max_unrealized_pnl_percent": "DOUBLE PRECISION",
+                "profit_lock_stage": "VARCHAR(32) DEFAULT 'none'",
             }
             for column, ddl_type in expected_columns.items():
                 if column not in existing:

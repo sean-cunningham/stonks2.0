@@ -200,6 +200,35 @@ def compute_atr14_wilder(completed_5m: list[IntradayBar]) -> float | None:
     return atr
 
 
+def compute_atr_early_available_bars(completed_5m: list[IntradayBar]) -> float | None:
+    """
+    Early-session ATR estimate from available completed 5m bars.
+
+    Uses the same true-range definition as ATR(14), but computes a simple average
+    over available completed bars when there are at least 6 and fewer than 15 bars.
+    """
+    n = len(completed_5m)
+    if n < 6:
+        return None
+    if n >= 15:
+        return compute_atr14_wilder(completed_5m)
+    trs: list[float] = []
+    for i, bar in enumerate(completed_5m):
+        if i == 0:
+            trs.append(bar.high - bar.low)
+            continue
+        prev_close = completed_5m[i - 1].close
+        tr = max(
+            bar.high - bar.low,
+            abs(bar.high - prev_close),
+            abs(bar.low - prev_close),
+        )
+        trs.append(tr)
+    if not trs:
+        return None
+    return sum(trs) / float(len(trs))
+
+
 def compute_relative_volume(completed_5m: list[IntradayBar]) -> tuple[float | None, bool]:
     """Last completed bar volume vs SMA(20) of prior volumes."""
     if len(completed_5m) < 21:
@@ -253,6 +282,8 @@ def compute_context_metrics(
 
     completed_5m = completed_5m_bars(rth_5m, now)
     atr = compute_atr14_wilder(completed_5m)
+    if atr is None:
+        atr = compute_atr_early_available_bars(completed_5m)
     swing_h, swing_l = compute_recent_swings(completed_5m)
     rel, rel_ok = compute_relative_volume(completed_5m)
 

@@ -219,6 +219,10 @@ class PaperTradeService:
             entry_evaluation_fingerprint=fingerprint,
             exit_policy=exit_pol.model_dump(mode="json"),
             sizing_policy=sizing_pol.model_dump(mode="json"),
+            active_stop_price=float(quote.ask) * 0.75,
+            take_profit_price=float(quote.ask) * 1.50,
+            max_unrealized_pnl_percent=0.0,
+            profit_lock_stage="none",
         )
         try:
             row = repo.create_trade(row)

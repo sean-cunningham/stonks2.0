@@ -86,7 +86,14 @@ def _entry_underlying_from_evaluation_snap(row) -> float | None:
     return None
 
 
-def _pct_and_levels(*, entry_price: float, mark_price: float | None, exit_policy: dict | None) -> tuple[float | None, float | None, float | None]:
+def _pct_and_levels(
+    *,
+    entry_price: float,
+    mark_price: float | None,
+    exit_policy: dict | None,
+    persisted_stop_price: float | None = None,
+    persisted_take_profit_price: float | None = None,
+) -> tuple[float | None, float | None, float | None]:
     if entry_price <= 0:
         return None, None, None
     pnl_pct = ((float(mark_price) - entry_price) / entry_price) if mark_price is not None else None
@@ -97,8 +104,16 @@ def _pct_and_levels(*, entry_price: float, mark_price: float | None, exit_policy
         take_profit_pct_raw = exit_policy.get("profit_target_pct") or exit_policy.get("take_profit_pct")
     stop_pct = float(stop_pct_raw) if isinstance(stop_pct_raw, (int, float)) else None
     take_profit_pct = float(take_profit_pct_raw) if isinstance(take_profit_pct_raw, (int, float)) else None
-    stop_price = entry_price * (1.0 - stop_pct) if stop_pct is not None else None
-    take_profit_price = entry_price * (1.0 + take_profit_pct) if take_profit_pct is not None else None
+    stop_price = (
+        float(persisted_stop_price)
+        if persisted_stop_price is not None
+        else (entry_price * (1.0 - stop_pct) if stop_pct is not None else None)
+    )
+    take_profit_price = (
+        float(persisted_take_profit_price)
+        if persisted_take_profit_price is not None
+        else (entry_price * (1.0 + take_profit_pct) if take_profit_pct is not None else None)
+    )
     return pnl_pct, stop_price, take_profit_price
 
 
@@ -152,13 +167,17 @@ def build_strategy_one_dashboard(
         if p.valuation.valuation_error:
             valuation_errors += 1
         mark_price = p.valuation.current_mid if p.valuation.current_mid is not None else p.valuation.current_bid
+        match_row = next((r for r in open_rows if int(r.id) == p.paper_trade_id), None)
         pnl_pct, stop_price, take_profit_price = _pct_and_levels(
             entry_price=float(p.entry_price),
             mark_price=mark_price,
             exit_policy=p.valuation.exit_policy,
+            persisted_stop_price=float(match_row.active_stop_price) if match_row and match_row.active_stop_price is not None else None,
+            persisted_take_profit_price=(
+                float(match_row.take_profit_price) if match_row and match_row.take_profit_price is not None else None
+            ),
         )
         exit_blockers = list(p.exit_evaluation.blockers) if p.exit_evaluation.blockers else []
-        match_row = next((r for r in open_rows if int(r.id) == p.paper_trade_id), None)
         open_cards.append(
             StrategyOpenPositionCard(
                 paper_trade_id=p.paper_trade_id,
@@ -183,6 +202,12 @@ def build_strategy_one_dashboard(
                 quote_blocker_code=p.valuation.quote_blocker_code,
                 exit_blocked_reasons=exit_blockers,
                 entry_underlying_price=_entry_underlying_from_evaluation_snap(match_row),
+                max_unrealized_pnl_percent=(
+                    float(match_row.max_unrealized_pnl_percent)
+                    if match_row and match_row.max_unrealized_pnl_percent is not None
+                    else None
+                ),
+                profit_lock_stage=match_row.profit_lock_stage if match_row else None,
             )
         )
 

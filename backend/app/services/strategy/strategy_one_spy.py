@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Literal
 
 from app.schemas.context import ContextStatusResponse, ContextSummaryResponse
 from app.schemas.market import ChainLatestResponse, MarketStatusResponse, NearAtmContract
@@ -41,6 +42,11 @@ class StrategyOneEvalInput:
     latest_5m_atr: float | None
     recent_swing_high: float | None
     recent_swing_low: float | None
+    completed_5m_bar_count: int
+    context_session_mode: Literal["none", "early", "mature"]
+    early_session_ready: bool
+    mature_session_ready: bool
+    atr_mode: Literal["none", "early_available_bars", "atr14"]
     market_ready: bool
     market_block_reason: str
     chain_available: bool
@@ -75,6 +81,11 @@ class StrategyOneEvalInput:
             latest_5m_atr=summary.latest_5m_atr,
             recent_swing_high=summary.recent_swing_high,
             recent_swing_low=summary.recent_swing_low,
+            completed_5m_bar_count=status.completed_5m_bar_count,
+            context_session_mode=status.context_session_mode,
+            early_session_ready=status.early_session_ready,
+            mature_session_ready=status.mature_session_ready,
+            atr_mode=status.atr_mode,
             market_ready=market.market_ready,
             market_block_reason=market.block_reason,
             chain_available=chain.available,
@@ -101,6 +112,11 @@ def _snapshot(inp: StrategyOneEvalInput) -> StrategyOneContextSnapshot:
         latest_5m_atr=inp.latest_5m_atr,
         recent_swing_high=inp.recent_swing_high,
         recent_swing_low=inp.recent_swing_low,
+        completed_5m_bar_count=inp.completed_5m_bar_count,
+        context_session_mode=inp.context_session_mode,
+        early_session_ready=inp.early_session_ready,
+        mature_session_ready=inp.mature_session_ready,
+        atr_mode=inp.atr_mode,
         market_ready=inp.market_ready,
         market_block_reason=inp.market_block_reason,
         chain_available=inp.chain_available,
@@ -507,6 +523,61 @@ def evaluate_strategy_one_spy(
             ),
         )
     diag.gate_pass["vwap_or_geometry_consistent"] = True
+
+    if inp.context_session_mode == "early":
+        if _inside_opening_range(px, orl, orh):
+            if px > vwap:
+                blockers.append("early_mode_inside_or_reclaim_disabled")
+                reasons.append("early_mode_requires_clean_or_breakout")
+            elif px < vwap:
+                blockers.append("early_mode_inside_or_distribution_disabled")
+                reasons.append("early_mode_requires_clean_or_breakdown")
+            else:
+                blockers.append("early_mode_inside_or_reclaim_disabled")
+                reasons.append("early_mode_requires_clean_or_breakout")
+            return StrategyOneEvaluationResponse(
+                decision="no_trade",
+                blockers=blockers,
+                reasons=reasons,
+                context_snapshot_used=snap,
+                contract_candidate=None,
+                evaluation_timestamp=ts,
+                diagnostics=_finalize_diagnostics(
+                    diag,
+                    "structure_bull_or_bear_detected",
+                    explanation="early mode requires clean OR breakout/breakdown; inside-OR entries disabled",
+                ),
+            )
+        if px > vwap and not (px > orh and px >= sh):
+            blockers.append("early_mode_requires_clean_or_breakout")
+            return StrategyOneEvaluationResponse(
+                decision="no_trade",
+                blockers=blockers,
+                reasons=reasons,
+                context_snapshot_used=snap,
+                contract_candidate=None,
+                evaluation_timestamp=ts,
+                diagnostics=_finalize_diagnostics(
+                    diag,
+                    "structure_bull_or_bear_detected",
+                    explanation="early mode bullish path requires price above VWAP, OR high breakout, and swing-high confirmation",
+                ),
+            )
+        if px < vwap and not (px < orl and px <= sl):
+            blockers.append("early_mode_requires_clean_or_breakdown")
+            return StrategyOneEvaluationResponse(
+                decision="no_trade",
+                blockers=blockers,
+                reasons=reasons,
+                context_snapshot_used=snap,
+                contract_candidate=None,
+                evaluation_timestamp=ts,
+                diagnostics=_finalize_diagnostics(
+                    diag,
+                    "structure_bull_or_bear_detected",
+                    explanation="early mode bearish path requires price below VWAP, OR low breakdown, and swing-low confirmation",
+                ),
+            )
 
     bull = px > vwap and _bullish_structure(px, orh, orl, sh)
     bear = px < vwap and _bearish_structure(px, orh, orl, sl)

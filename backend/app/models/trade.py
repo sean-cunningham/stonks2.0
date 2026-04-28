@@ -37,6 +37,10 @@ class PaperTrade(Base):
     entry_evaluation_fingerprint: Mapped[str] = mapped_column(String(256), default="", index=True)
     exit_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     sizing_policy: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    active_stop_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    take_profit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_unrealized_pnl_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    profit_lock_stage: Mapped[str | None] = mapped_column(String(32), nullable=True, default="none")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

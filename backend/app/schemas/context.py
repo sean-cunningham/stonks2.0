@@ -35,6 +35,11 @@ class ContextStatusResponse(BaseModel):
     stale_5m_reference_time: datetime | None = None
     stale_5m_seconds: float | None = None
     stale_5m_boolean: bool = False
+    completed_5m_bar_count: int = 0
+    context_session_mode: str = "none"
+    early_session_ready: bool = False
+    mature_session_ready: bool = False
+    atr_mode: str = "none"
     source_status: str
     bars_source: str
 
@@ -82,6 +87,11 @@ class ContextSummaryResponse(BaseModel):
     context_ready: bool
     block_reason: str
     block_reason_analysis: str = "none"
+    completed_5m_bar_count: int = 0
+    context_session_mode: str = "none"
+    early_session_ready: bool = False
+    mature_session_ready: bool = False
+    atr_mode: str = "none"
     source_status: str
     bars_source: str
 

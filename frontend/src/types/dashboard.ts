@@ -94,6 +94,8 @@ export type DashboardResponse = {
     quote_blocker_code?: string | null;
     exit_blocked_reasons?: string[];
     entry_underlying_price?: number | null;
+    max_unrealized_pnl_percent?: number | null;
+    profit_lock_stage?: string | null;
   }>;
   recent_closed_trades: Array<{
     paper_trade_id: number;

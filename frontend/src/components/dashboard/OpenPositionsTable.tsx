@@ -98,6 +98,8 @@ export default function OpenPositionsTable({
                       <div className="small-print">
                         <div>SL: {money(r.stop_price ?? null)}</div>
                         <div>TP: {money(r.take_profit_price ?? null)}</div>
+                        <div>Stage: {r.profit_lock_stage ?? "none"}</div>
+                        <div>Max U%: {pct(r.max_unrealized_pnl_percent ?? null)}</div>
                       </div>
                     </td>
                     <td className="small-print">

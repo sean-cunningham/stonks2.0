@@ -37,6 +37,11 @@ class StrategyOneContextSnapshot(BaseModel):
     latest_5m_atr: float | None = None
     recent_swing_high: float | None = None
     recent_swing_low: float | None = None
+    completed_5m_bar_count: int = 0
+    context_session_mode: str = "none"
+    early_session_ready: bool = False
+    mature_session_ready: bool = False
+    atr_mode: str = "none"
     market_ready: bool
     market_block_reason: str
     chain_available: bool

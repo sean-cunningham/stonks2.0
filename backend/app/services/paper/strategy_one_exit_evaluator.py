@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time, timezone
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from app.models.trade import PaperTrade
@@ -103,6 +104,56 @@ def _non_actionable_hold(
         current_market_snapshot=mkt_snap,
         exit_levels_snapshot=levels_snap,
         evaluation_timestamp=evaluation_timestamp,
+    )
+
+
+@dataclass(frozen=True)
+class ExitState:
+    active_stop_price: float
+    take_profit_price: float
+    max_unrealized_pnl_percent: float
+    profit_lock_stage: Literal["none", "breakeven", "lock_15"]
+
+
+def _clamp_stage(raw: object) -> Literal["none", "breakeven", "lock_15"]:
+    if raw == "lock_15":
+        return "lock_15"
+    if raw == "breakeven":
+        return "breakeven"
+    return "none"
+
+
+def _current_unrealized_pct(*, current_bid: float | None, entry_price: float) -> float | None:
+    if current_bid is None or entry_price <= 0:
+        return None
+    return (float(current_bid) - float(entry_price)) / float(entry_price)
+
+
+def _build_exit_state(*, row: PaperTrade, current_unrealized_pct: float | None) -> ExitState:
+    entry = float(row.entry_price)
+    base_stop = entry * 0.75
+    tp = entry * 1.50
+    persisted_max = float(row.max_unrealized_pnl_percent) if row.max_unrealized_pnl_percent is not None else None
+    seed_current = float(current_unrealized_pct) if current_unrealized_pct is not None else 0.0
+    max_pct = max(persisted_max if persisted_max is not None else seed_current, seed_current)
+
+    stage = _clamp_stage(row.profit_lock_stage)
+    if max_pct >= 0.40:
+        stage = "lock_15"
+    elif max_pct >= 0.25 and stage != "lock_15":
+        stage = "breakeven"
+
+    stop = float(row.active_stop_price) if row.active_stop_price is not None else base_stop
+    if stage == "breakeven":
+        stop = max(stop, entry)
+    elif stage == "lock_15":
+        stop = max(stop, entry * 1.15)
+    stop = max(stop, base_stop)
+    return ExitState(
+        active_stop_price=float(stop),
+        take_profit_price=float(tp),
+        max_unrealized_pnl_percent=float(max_pct),
+        profit_lock_stage=stage,
     )
 
 
@@ -249,44 +300,20 @@ def evaluate_strategy_one_open_exit_readonly(inp: ExitEvaluationInput) -> Strate
             evaluation_timestamp=clock,
         )
 
+    current_unrealized_pct = _current_unrealized_pct(current_bid=v.current_bid, entry_price=float(row.entry_price))
+    exit_state = _build_exit_state(row=row, current_unrealized_pct=current_unrealized_pct)
+    levels_snap["active_stop_price"] = exit_state.active_stop_price
+    levels_snap["take_profit_price"] = exit_state.take_profit_price
+    levels_snap["max_unrealized_pnl_percent"] = exit_state.max_unrealized_pnl_percent
+    levels_snap["profit_lock_stage"] = exit_state.profit_lock_stage
+
     blockers: list[str] = []
     reasons: list[str] = []
 
-    # 1) Hard fail-safe: unrealized loss at or beyond -1 premium-risk R (fail-safe dollars).
-    if u <= -premium_r + 1e-6:
-        reasons.append("premium_fail_safe_stop_breached")
-        return StrategyOneExitEvaluationResponse(
-            action="close_now",
-            reasons=reasons,
-            blockers=blockers,
-            current_policy_snapshot=policy_snap,
-            current_position_snapshot=pos_snap,
-            current_market_snapshot=mkt_snap,
-            exit_levels_snapshot=levels_snap,
-            evaluation_timestamp=clock,
-        )
-
-    # 2) Thesis break vs stored anchor.
-    thesis = exit_pol.thesis_stop_reference or {}
-    if _thesis_broken(entry_decision=row.entry_decision, thesis=thesis, latest_price=summary.latest_price):
-        reasons.append("thesis_structure_break_vs_entry_anchor")
-        return StrategyOneExitEvaluationResponse(
-            action="close_now",
-            reasons=reasons,
-            blockers=blockers,
-            current_policy_snapshot=policy_snap,
-            current_position_snapshot=pos_snap,
-            current_market_snapshot=mkt_snap,
-            exit_levels_snapshot=levels_snap,
-            evaluation_timestamp=clock,
-        )
-
-    # Intraday clock: always policy zone (default America/New_York), never local TZ.
+    # 1) Intraday hard flat (highest priority once actionable).
     zone = ZoneInfo(exit_pol.intraday_hard_flat_zone)
     now_local = clock.astimezone(zone)
     flat_t = _parse_hh_mm_et(exit_pol.intraday_hard_flat_time_et)
-
-    # 3) Intraday hard flat (RTH only; avoids weekend false positives). Compare local ET wall time only.
     if (
         exit_pol.trade_horizon_class == "intraday_continuation"
         and st.us_equity_rth_open
@@ -304,19 +331,9 @@ def evaluate_strategy_one_open_exit_readonly(inp: ExitEvaluationInput) -> Strate
             evaluation_timestamp=clock,
         )
 
-    # 4) No meaningful progress (intraday): past max timeout and under +0.1 premium-risk R on bid basis.
-    if row.entry_time:
-        et = row.entry_time if row.entry_time.tzinfo else row.entry_time.replace(tzinfo=timezone.utc)
-        elapsed_min = (clock - et).total_seconds() / 60.0
-    else:
-        elapsed_min = 0.0
-    progress_floor = 0.1 * premium_r
-    if (
-        exit_pol.trade_horizon_class == "intraday_continuation"
-        and elapsed_min > float(exit_pol.intraday_no_progress_timeout_minutes_max)
-        and u < progress_floor
-    ):
-        reasons.append("intraday_no_progress_past_timeout_window")
+    # 2) Full take-profit at +50% premium from entry.
+    if v.current_bid is not None and float(v.current_bid) >= exit_state.take_profit_price - 1e-9:
+        reasons.append("take_profit_50pct")
         return StrategyOneExitEvaluationResponse(
             action="close_now",
             reasons=reasons,
@@ -328,11 +345,16 @@ def evaluate_strategy_one_open_exit_readonly(inp: ExitEvaluationInput) -> Strate
             evaluation_timestamp=clock,
         )
 
-    # 5) Trail activation (premium-risk R multiple).
-    if u >= exit_pol.trail_activation_r * premium_r - 1e-6:
-        reasons.append("trail_activation_premium_r_reached")
+    # 3) Active stop by stage.
+    if v.current_bid is not None and float(v.current_bid) <= exit_state.active_stop_price + 1e-9:
+        if exit_state.profit_lock_stage == "lock_15":
+            reasons.append("profit_lock_15pct_after_40pct")
+        elif exit_state.profit_lock_stage == "breakeven":
+            reasons.append("breakeven_stop_after_25pct")
+        else:
+            reasons.append("hard_stop_25pct")
         return StrategyOneExitEvaluationResponse(
-            action="trail_active",
+            action="close_now",
             reasons=reasons,
             blockers=blockers,
             current_policy_snapshot=policy_snap,
@@ -342,11 +364,12 @@ def evaluate_strategy_one_open_exit_readonly(inp: ExitEvaluationInput) -> Strate
             evaluation_timestamp=clock,
         )
 
-    # 6) Profit trigger (premium-risk R multiple).
-    if u >= exit_pol.profit_trigger_r * premium_r - 1e-6:
-        reasons.append("profit_trigger_premium_r_reached")
+    # 4) Thesis break vs stored anchor.
+    thesis = exit_pol.thesis_stop_reference or {}
+    if _thesis_broken(entry_decision=row.entry_decision, thesis=thesis, latest_price=summary.latest_price):
+        reasons.append("thesis_structure_break_vs_entry_anchor")
         return StrategyOneExitEvaluationResponse(
-            action="tighten_stop",
+            action="close_now",
             reasons=reasons,
             blockers=blockers,
             current_policy_snapshot=policy_snap,
@@ -356,23 +379,21 @@ def evaluate_strategy_one_open_exit_readonly(inp: ExitEvaluationInput) -> Strate
             evaluation_timestamp=clock,
         )
 
-    # 7) Optional promote-to-swing hint (never auto; intraday only, profitable, fresh quote, not near flat).
-    promote_floor = 0.5 * premium_r
-    minutes_to_flat: float | None = None
-    if st.us_equity_rth_open:
-        flat_dt = datetime.combine(now_local.date(), flat_t, tzinfo=now_local.tzinfo)
-        minutes_to_flat = (flat_dt - now_local).total_seconds() / 60.0
-
+    # 5) Time stop: >=90 minutes open and unrealized below +15%.
+    if row.entry_time:
+        et = row.entry_time if row.entry_time.tzinfo else row.entry_time.replace(tzinfo=timezone.utc)
+        elapsed_min = (clock - et).total_seconds() / 60.0
+    else:
+        elapsed_min = 0.0
     if (
         exit_pol.trade_horizon_class == "intraday_continuation"
-        and v.quote_is_fresh
-        and u > 0
-        and u >= promote_floor
-        and (minutes_to_flat is None or minutes_to_flat > 10.0)
+        and elapsed_min >= 90.0
+        and current_unrealized_pct is not None
+        and current_unrealized_pct < 0.15
     ):
-        reasons.append("intraday_profitable_structure_intact_promotion_hint_only")
+        reasons.append("time_stop_under_15pct_after_90min")
         return StrategyOneExitEvaluationResponse(
-            action="promote_to_swing_candidate",
+            action="close_now",
             reasons=reasons,
             blockers=blockers,
             current_policy_snapshot=policy_snap,
@@ -382,7 +403,7 @@ def evaluate_strategy_one_open_exit_readonly(inp: ExitEvaluationInput) -> Strate
             evaluation_timestamp=clock,
         )
 
-    reasons.append("no_exit_rules_triggered")
+    reasons.append("no_exit_rules_triggered_exit_state_updated")
     return StrategyOneExitEvaluationResponse(
         action="hold",
         reasons=reasons,

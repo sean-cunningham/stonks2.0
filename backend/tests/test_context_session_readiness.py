@@ -174,6 +174,87 @@ class ContextSessionReadinessTests(unittest.TestCase):
         self.assertEqual(out.block_reason, "market_closed")
         self.assertEqual(out.block_reason_analysis, "latest_session_complete")
 
+    def test_rth_fewer_than_6_completed_5m_not_ready(self) -> None:
+        now = datetime(2026, 4, 21, 14, 0, 0, tzinfo=timezone.utc)  # 10:00 ET
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= now - timedelta(minutes=1)]
+        b5 = [x for x in b5 if x.bar_time <= datetime(2026, 4, 21, 13, 50, 0, tzinfo=timezone.utc)]  # 5 completed bars
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertFalse(out.context_ready_for_live_trading)
+        self.assertEqual(out.completed_5m_bar_count, 5)
+        self.assertEqual(out.context_session_mode, "none")
+        self.assertFalse(out.early_session_ready)
+        self.assertFalse(out.mature_session_ready)
+        self.assertEqual(out.atr_mode, "none")
+
+    def test_rth_exactly_6_completed_5m_can_be_early_ready(self) -> None:
+        now = datetime(2026, 4, 21, 14, 1, 0, tzinfo=timezone.utc)  # 10:01 ET
+        start = datetime(2026, 4, 21, 13, 30, 0, tzinfo=timezone.utc)
+        b1 = [_bar("SPY", "1m", start + timedelta(minutes=i), 500.0 + (i * 0.02)) for i in range(31)]
+        # Force at least one pivot high/low in first 6 completed 5m bars.
+        five_prices = [500.0, 501.0, 503.0, 502.0, 504.0, 503.5]
+        b5 = [_bar("SPY", "5m", start + timedelta(minutes=5 * i), five_prices[i]) for i in range(6)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertTrue(out.context_ready_for_live_trading)
+        self.assertEqual(out.completed_5m_bar_count, 6)
+        self.assertEqual(out.context_session_mode, "early")
+        self.assertTrue(out.early_session_ready)
+        self.assertFalse(out.mature_session_ready)
+        self.assertEqual(out.atr_mode, "early_available_bars")
+
+    def test_early_window_missing_swing_not_ready(self) -> None:
+        now = datetime(2026, 4, 21, 14, 1, 0, tzinfo=timezone.utc)  # 10:01 ET
+        start = datetime(2026, 4, 21, 13, 30, 0, tzinfo=timezone.utc)
+        b1 = [_bar("SPY", "1m", start + timedelta(minutes=i), 500.0 + (i * 0.01)) for i in range(31)]
+        # Strictly increasing highs/lows so no pivot high exists.
+        b5 = [_bar("SPY", "5m", start + timedelta(minutes=5 * i), 500.0 + float(i)) for i in range(6)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertFalse(out.context_ready_for_live_trading)
+        self.assertEqual(out.context_session_mode, "early")
+        self.assertFalse(out.early_session_ready)
+        self.assertFalse(out.mature_session_ready)
+        self.assertEqual(out.block_reason, "insufficient_5m_bars")
+
+    def test_mature_window_uses_atr14_mode(self) -> None:
+        now = datetime(2026, 4, 21, 15, 0, 0, tzinfo=timezone.utc)  # 11:00 ET
+        b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))
+        b1 = [x for x in b1 if x.bar_time <= now - timedelta(minutes=1)]
+        b5 = [x for x in b5 if x.bar_time <= now - timedelta(minutes=5)]
+
+        out = evaluate_context_readiness(
+            bars_1m=b1,
+            bars_5m=b5,
+            settings=self.settings,
+            dxlink=_dxlink_health(),
+            now=now,
+        )
+        self.assertTrue(out.context_ready_for_live_trading)
+        self.assertGreaterEqual(out.completed_5m_bar_count, 15)
+        self.assertEqual(out.context_session_mode, "mature")
+        self.assertTrue(out.mature_session_ready)
+        self.assertEqual(out.atr_mode, "atr14")
+
     def test_rth_5m_freshness_uses_latest_completed_bucket_semantics(self) -> None:
         now = datetime(2026, 4, 21, 18, 3, 0, tzinfo=timezone.utc)  # 14:03 ET
         b1, b5 = _session_bars_for_day(datetime(2026, 4, 21, tzinfo=timezone.utc))

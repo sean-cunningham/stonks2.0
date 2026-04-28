@@ -170,10 +170,33 @@ def _summary(*, price: float = 500.0, atr: float = 2.0) -> ContextSummaryRespons
 
 
 class StrategyOneExitEvaluatorTests(unittest.TestCase):
-    def test_fail_safe_breach_close_now(self) -> None:
-        """Unrealized bid P&L at or worse than -1R (fail-safe loss) => close_now."""
+    def test_legacy_open_row_bootstraps_exit_state_fields(self) -> None:
         row = _row()
-        v = _valuation(u_bid=-80.0)
+        row.active_stop_price = None
+        row.take_profit_price = None
+        row.max_unrealized_pnl_percent = None
+        row.profit_lock_stage = None
+        v = _valuation(u_bid=0.0)
+        v = v.model_copy(update={"current_bid": 2.2})
+        inp = ExitEvaluationInput(
+            position=row,
+            valuation=v,
+            context_status=_status(),
+            context_summary=_summary(price=500.0),
+            market_status=_market(),
+            clock_utc=CLOCK,
+        )
+        out = evaluate_strategy_one_open_exit_readonly(inp)
+        self.assertEqual(out.action, "hold")
+        self.assertAlmostEqual(float(out.exit_levels_snapshot["active_stop_price"]), 1.65, places=6)
+        self.assertAlmostEqual(float(out.exit_levels_snapshot["take_profit_price"]), 3.3, places=6)
+        self.assertEqual(out.exit_levels_snapshot["profit_lock_stage"], "none")
+
+    def test_fail_safe_breach_close_now(self) -> None:
+        """Initial hard stop is -25% premium from entry."""
+        row = _row()
+        v = _valuation(u_bid=-60.0)
+        v = v.model_copy(update={"current_bid": 1.64})  # below 2.2 * 0.75 = 1.65
         inp = ExitEvaluationInput(
             position=row,
             valuation=v,
@@ -184,7 +207,7 @@ class StrategyOneExitEvaluatorTests(unittest.TestCase):
         )
         out = evaluate_strategy_one_open_exit_readonly(inp)
         self.assertEqual(out.action, "close_now")
-        self.assertTrue(any("fail_safe" in r for r in out.reasons))
+        self.assertIn("hard_stop_25pct", out.reasons)
 
     def test_thesis_break_call_close_now(self) -> None:
         row = _row()
@@ -234,24 +257,10 @@ class StrategyOneExitEvaluatorTests(unittest.TestCase):
         self.assertEqual(out.action, "close_now")
         self.assertTrue(any("hard_flat" in r for r in out.reasons))
 
-    def test_profit_trigger_tighten_stop(self) -> None:
-        row = _row()
-        v = _valuation(u_bid=80.0)
-        inp = ExitEvaluationInput(
-            position=row,
-            valuation=v,
-            context_status=_status(),
-            context_summary=_summary(price=500.0),
-            market_status=_market(),
-            clock_utc=CLOCK,
-        )
-        out = evaluate_strategy_one_open_exit_readonly(inp)
-        self.assertEqual(out.action, "tighten_stop")
-        self.assertTrue(any("profit_trigger_premium_r" in r for r in out.reasons))
-
-    def test_trail_activation_trail_active(self) -> None:
+    def test_take_profit_50pct_close_now(self) -> None:
         row = _row()
         v = _valuation(u_bid=120.0)
+        v = v.model_copy(update={"current_bid": 3.30})  # 50% over 2.2
         inp = ExitEvaluationInput(
             position=row,
             valuation=v,
@@ -261,11 +270,80 @@ class StrategyOneExitEvaluatorTests(unittest.TestCase):
             clock_utc=CLOCK,
         )
         out = evaluate_strategy_one_open_exit_readonly(inp)
-        self.assertEqual(out.action, "trail_active")
-        self.assertIsNotNone(
-            out.exit_levels_snapshot.get("informational_structural_trailing_reference_price_v1")
+        self.assertEqual(out.action, "close_now")
+        self.assertIn("take_profit_50pct", out.reasons)
+
+    def test_stage_advances_to_breakeven_at_25pct(self) -> None:
+        row = _row()
+        v = _valuation(u_bid=60.0)
+        v = v.model_copy(update={"current_bid": 2.751})  # just above +25%
+        inp = ExitEvaluationInput(
+            position=row,
+            valuation=v,
+            context_status=_status(),
+            context_summary=_summary(price=500.0),
+            market_status=_market(),
+            clock_utc=CLOCK,
         )
-        self.assertIn("premium_r_dollar", out.exit_levels_snapshot)
+        out = evaluate_strategy_one_open_exit_readonly(inp)
+        self.assertEqual(out.action, "hold")
+        self.assertEqual(out.exit_levels_snapshot.get("profit_lock_stage"), "breakeven")
+        self.assertAlmostEqual(float(out.exit_levels_snapshot["active_stop_price"]), 2.2, places=6)
+
+    def test_pullback_to_entry_after_25pct_closes_breakeven(self) -> None:
+        row = _row()
+        row.max_unrealized_pnl_percent = 0.25
+        row.profit_lock_stage = "breakeven"
+        row.active_stop_price = 2.2
+        v = _valuation(u_bid=0.0)
+        v = v.model_copy(update={"current_bid": 2.2})
+        inp = ExitEvaluationInput(
+            position=row,
+            valuation=v,
+            context_status=_status(),
+            context_summary=_summary(price=500.0),
+            market_status=_market(),
+            clock_utc=CLOCK,
+        )
+        out = evaluate_strategy_one_open_exit_readonly(inp)
+        self.assertEqual(out.action, "close_now")
+        self.assertIn("breakeven_stop_after_25pct", out.reasons)
+
+    def test_stage_advances_to_lock_15_at_40pct(self) -> None:
+        row = _row()
+        v = _valuation(u_bid=90.0)
+        v = v.model_copy(update={"current_bid": 3.081})  # just above +40%
+        inp = ExitEvaluationInput(
+            position=row,
+            valuation=v,
+            context_status=_status(),
+            context_summary=_summary(price=500.0),
+            market_status=_market(),
+            clock_utc=CLOCK,
+        )
+        out = evaluate_strategy_one_open_exit_readonly(inp)
+        self.assertEqual(out.action, "hold")
+        self.assertEqual(out.exit_levels_snapshot.get("profit_lock_stage"), "lock_15")
+        self.assertAlmostEqual(float(out.exit_levels_snapshot["active_stop_price"]), 2.53, places=6)
+
+    def test_pullback_to_lock_15_after_40pct_closes(self) -> None:
+        row = _row()
+        row.max_unrealized_pnl_percent = 0.40
+        row.profit_lock_stage = "lock_15"
+        row.active_stop_price = 2.53
+        v = _valuation(u_bid=0.0)
+        v = v.model_copy(update={"current_bid": 2.53})
+        inp = ExitEvaluationInput(
+            position=row,
+            valuation=v,
+            context_status=_status(),
+            context_summary=_summary(price=500.0),
+            market_status=_market(),
+            clock_utc=CLOCK,
+        )
+        out = evaluate_strategy_one_open_exit_readonly(inp)
+        self.assertEqual(out.action, "close_now")
+        self.assertIn("profit_lock_15pct_after_40pct", out.reasons)
 
     def test_healthy_below_profit_trigger_hold(self) -> None:
         row = _row()
@@ -283,9 +361,10 @@ class StrategyOneExitEvaluatorTests(unittest.TestCase):
         self.assertEqual(out.blockers, [])
         self.assertNotIn("evaluation_blocked_non_actionable_state", out.reasons)
 
-    def test_stalled_intraday_close_now(self) -> None:
-        row = _row(entry_time=CLOCK - timedelta(minutes=50))
-        v = _valuation(u_bid=2.0)
+    def test_time_stop_closes_after_90min_when_under_15pct(self) -> None:
+        row = _row(entry_time=CLOCK - timedelta(minutes=95))
+        v = _valuation(u_bid=10.0)
+        v = v.model_copy(update={"current_bid": 2.3})  # ~4.5%
         inp = ExitEvaluationInput(
             position=row,
             valuation=v,
@@ -296,11 +375,12 @@ class StrategyOneExitEvaluatorTests(unittest.TestCase):
         )
         out = evaluate_strategy_one_open_exit_readonly(inp)
         self.assertEqual(out.action, "close_now")
-        self.assertTrue(any("progress" in r for r in out.reasons))
+        self.assertIn("time_stop_under_15pct_after_90min", out.reasons)
 
-    def test_promote_to_swing_candidate(self) -> None:
-        row = _row()
-        v = _valuation(u_bid=50.0)
+    def test_time_stop_does_not_close_when_at_or_above_15pct(self) -> None:
+        row = _row(entry_time=CLOCK - timedelta(minutes=95))
+        v = _valuation(u_bid=40.0)
+        v = v.model_copy(update={"current_bid": 2.531})  # slightly above +15%
         inp = ExitEvaluationInput(
             position=row,
             valuation=v,
@@ -310,7 +390,7 @@ class StrategyOneExitEvaluatorTests(unittest.TestCase):
             clock_utc=CLOCK,
         )
         out = evaluate_strategy_one_open_exit_readonly(inp)
-        self.assertEqual(out.action, "promote_to_swing_candidate")
+        self.assertEqual(out.action, "hold")
 
     def test_closed_position_blocked(self) -> None:
         row = _row()

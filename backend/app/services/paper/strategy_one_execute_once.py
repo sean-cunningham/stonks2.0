@@ -61,6 +61,39 @@ def _primary_failed_gate_from_evaluation(evaluation) -> str | None:
     return getattr(diag, "primary_failed_gate", None)
 
 
+def _apply_exit_state_from_evaluation(*, row: PaperTrade, exit_eval, repo: PaperTradeRepository) -> None:
+    """Persist Strategy 1 dynamic exit-state fields computed by exit evaluator."""
+    snap = getattr(exit_eval, "exit_levels_snapshot", None)
+    if not isinstance(snap, dict):
+        return
+    changed = False
+    active_stop = snap.get("active_stop_price")
+    take_profit = snap.get("take_profit_price")
+    max_u_pct = snap.get("max_unrealized_pnl_percent")
+    stage = snap.get("profit_lock_stage")
+    if isinstance(active_stop, (int, float)):
+        v = float(active_stop)
+        if row.active_stop_price is None or abs(float(row.active_stop_price) - v) > 1e-12:
+            row.active_stop_price = v
+            changed = True
+    if isinstance(take_profit, (int, float)):
+        v = float(take_profit)
+        if row.take_profit_price is None or abs(float(row.take_profit_price) - v) > 1e-12:
+            row.take_profit_price = v
+            changed = True
+    if isinstance(max_u_pct, (int, float)):
+        v = float(max_u_pct)
+        if row.max_unrealized_pnl_percent is None or abs(float(row.max_unrealized_pnl_percent) - v) > 1e-12:
+            row.max_unrealized_pnl_percent = v
+            changed = True
+    if isinstance(stage, str):
+        if row.profit_lock_stage != stage:
+            row.profit_lock_stage = stage
+            changed = True
+    if changed:
+        repo.update_trade(row)
+
+
 def require_acceptable_exit_quote_for_execution(valuation: PaperOpenPositionValuationResponse) -> None:
     """Fail-closed gate before any automated or emergency close that must honor fresh two-sided quotes."""
     if valuation.valuation_error:
@@ -119,6 +152,7 @@ def run_strategy_one_paper_execute_once(
                 clock_utc=clock,
             )
         )
+        _apply_exit_state_from_evaluation(row=row, exit_eval=exit_eval, repo=repo)
         if exit_eval.action != "close_now":
             notes.append("exit_evaluator_did_not_request_close_now")
             return StrategyOneExecuteOnceResponse(

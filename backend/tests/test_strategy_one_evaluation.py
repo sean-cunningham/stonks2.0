@@ -13,7 +13,16 @@ from app.services.strategy.strategy_one_spy import StrategyOneEvalInput, evaluat
 EVAL_CLOCK = datetime(2026, 4, 20, 16, 0, 0, tzinfo=timezone.utc)
 
 
-def _status(*, live: bool = True, block: str = "none") -> ContextStatusResponse:
+def _status(
+    *,
+    live: bool = True,
+    block: str = "none",
+    mode: str = "mature",
+    early_ready: bool = False,
+    mature_ready: bool = True,
+    completed_5m: int = 20,
+    atr_mode: str = "atr14",
+) -> ContextStatusResponse:
     return ContextStatusResponse(
         symbol="SPY",
         us_equity_rth_open=True,
@@ -30,6 +39,11 @@ def _status(*, live: bool = True, block: str = "none") -> ContextStatusResponse:
         vwap_available=True,
         opening_range_available=True,
         atr_available=True,
+        completed_5m_bar_count=completed_5m,
+        context_session_mode=mode,
+        early_session_ready=early_ready,
+        mature_session_ready=mature_ready,
+        atr_mode=atr_mode,
         source_status="ok",
         bars_source="tastytrade_dxlink_candle",
     )
@@ -212,6 +226,58 @@ class StrategyOneEvaluationTests(unittest.TestCase):
         out = evaluate_strategy_one_spy(inp, now=EVAL_CLOCK)
         self.assertEqual(out.decision, "candidate_put")
         self.assertTrue(any("inside_or" in r or "distribution" in r for r in out.reasons))
+
+    def test_early_mode_breakout_can_return_candidate_call(self) -> None:
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(mode="early", early_ready=True, mature_ready=False, completed_5m=6, atr_mode="early_available_bars"),
+            summary=_summary(px=510.0, vwap=505.0, orh=508.0, orl=502.0, atr=1.0, swing_h=509.0, swing_l=500.0),
+            market=_market(),
+            chain=_chain(contracts=[_good_call(strike=500.0), _good_put()]),
+        )
+        out = evaluate_strategy_one_spy(inp, now=EVAL_CLOCK)
+        self.assertEqual(out.decision, "candidate_call")
+
+    def test_early_mode_breakdown_can_return_candidate_put(self) -> None:
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(mode="early", early_ready=True, mature_ready=False, completed_5m=7, atr_mode="early_available_bars"),
+            summary=_summary(px=497.0, vwap=502.0, orh=508.0, orl=500.0, atr=1.0, swing_h=510.0, swing_l=498.0),
+            market=_market(),
+            chain=_chain(contracts=[_good_call(), _good_put(strike=500.0)]),
+        )
+        out = evaluate_strategy_one_spy(inp, now=EVAL_CLOCK)
+        self.assertEqual(out.decision, "candidate_put")
+
+    def test_early_mode_inside_or_reclaim_returns_no_trade(self) -> None:
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(mode="early", early_ready=True, mature_ready=False, completed_5m=6, atr_mode="early_available_bars"),
+            summary=_summary(px=506.0, vwap=504.0, orh=508.0, orl=502.0, atr=1.0, swing_h=505.5, swing_l=499.0),
+            market=_market(),
+            chain=_chain(contracts=[_good_call(strike=500.0)]),
+        )
+        out = evaluate_strategy_one_spy(inp, now=EVAL_CLOCK)
+        self.assertEqual(out.decision, "no_trade")
+        self.assertIn("early_mode_inside_or_reclaim_disabled", out.blockers)
+
+    def test_early_mode_inside_or_distribution_returns_no_trade(self) -> None:
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(mode="early", early_ready=True, mature_ready=False, completed_5m=7, atr_mode="early_available_bars"),
+            summary=_summary(px=503.0, vwap=506.0, orh=508.0, orl=502.0, atr=1.0, swing_h=509.0, swing_l=503.5),
+            market=_market(),
+            chain=_chain(contracts=[_good_put(strike=500.0)]),
+        )
+        out = evaluate_strategy_one_spy(inp, now=EVAL_CLOCK)
+        self.assertEqual(out.decision, "no_trade")
+        self.assertIn("early_mode_inside_or_distribution_disabled", out.blockers)
+
+    def test_mature_mode_inside_or_behavior_is_unchanged(self) -> None:
+        inp = StrategyOneEvalInput.from_api(
+            status=_status(mode="mature", early_ready=True, mature_ready=True, completed_5m=16, atr_mode="atr14"),
+            summary=_summary(px=506.0, vwap=504.0, orh=508.0, orl=502.0, atr=1.5, swing_h=505.5, swing_l=498.0),
+            market=_market(),
+            chain=_chain(contracts=[_good_call(strike=500.0)]),
+        )
+        out = evaluate_strategy_one_spy(inp, now=EVAL_CLOCK)
+        self.assertEqual(out.decision, "candidate_call")
 
     def test_no_trade_mixed_vwap_and_opening_range_geometry(self) -> None:
         """Bullish VWAP but lower half of opening range (inside OR only)."""

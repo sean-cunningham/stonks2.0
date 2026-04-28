@@ -435,6 +435,62 @@ class ExecuteOnceUnitTests(unittest.TestCase):
         self.assertEqual(out.cycle_action, "closed")
         self.assertEqual(out.closed_paper_trade.id, 7)
 
+    def test_exit_cycle_persists_profit_lock_state_on_hold(self) -> None:
+        row = MagicMock(spec=PaperTrade)
+        row.id = 7
+        row.strategy_id = PaperTradeService.STRATEGY_ID
+        row.status = "open"
+        row.active_stop_price = None
+        row.take_profit_price = None
+        row.max_unrealized_pnl_percent = None
+        row.profit_lock_stage = None
+        repo_inst = MagicMock()
+        repo_inst.list_open.return_value = [row]
+        exit_eval = MagicMock(spec=StrategyOneExitEvaluationResponse)
+        exit_eval.action = "hold"
+        exit_eval.blockers = []
+        exit_eval.reasons = ["no_exit_rules_triggered_exit_state_updated"]
+        exit_eval.exit_levels_snapshot = {
+            "active_stop_price": 2.2,
+            "take_profit_price": 3.3,
+            "max_unrealized_pnl_percent": 0.27,
+            "profit_lock_stage": "breakeven",
+        }
+        valuation = PaperOpenPositionValuationResponse(
+            paper_trade_id=7,
+            option_symbol="SPY  X",
+            side="long",
+            quantity=1,
+            entry_time=datetime.now(timezone.utc),
+            entry_price=2.0,
+            quote_is_fresh=True,
+            exit_actionable=True,
+        )
+        with (
+            patch(
+                "app.services.paper.strategy_one_execute_once.PaperTradeRepository",
+                return_value=repo_inst,
+            ),
+            patch(
+                "app.services.paper.strategy_one_execute_once.compute_open_position_valuation",
+                return_value=valuation,
+            ),
+            patch(
+                "app.services.paper.strategy_one_execute_once.evaluate_strategy_one_open_exit_readonly",
+                return_value=exit_eval,
+            ),
+        ):
+            out = run_strategy_one_paper_execute_once(
+                self.db,
+                context=self.context,
+                market=self.market,
+                settings=self.settings,
+            )
+        self.assertEqual(out.cycle_action, "no_action")
+        self.assertEqual(row.profit_lock_stage, "breakeven")
+        self.assertEqual(row.active_stop_price, 2.2)
+        repo_inst.update_trade.assert_called()
+
     def test_close_now_skipped_when_quote_not_acceptable(self) -> None:
         row = MagicMock(spec=PaperTrade)
         row.id = 1
