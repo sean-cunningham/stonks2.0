@@ -30,6 +30,18 @@ SLEEP_REASON_PAUSED = "paused"
 SLEEP_REASON_OUTSIDE_RTH = "outside_rth"
 
 
+def _normalize_runtime_error_code(exc: Exception) -> str:
+    raw = str(exc).strip()
+    low = raw.lower()
+    if "timed out during opening handshake" in low:
+        return "dxlink_handshake_timeout"
+    if "option_chain" in low or "option quote" in low or "missing_option_quote" in low:
+        return "option_quote_refresh_failed"
+    if "market" in low and "refresh" in low:
+        return "market_data_refresh_failed"
+    return raw[:256] if raw else exc.__class__.__name__
+
+
 class StrategyTwoRuntimeCoordinator:
     def __init__(self) -> None:
         self._entry_lock = threading.Lock()
@@ -190,7 +202,7 @@ class StrategyTwoRuntimeCoordinator:
                 )
             except Exception as exc:
                 finished = datetime.now(timezone.utc)
-                code = str(exc)[:256]
+                code = _normalize_runtime_error_code(exc)
                 state.last_cycle_finished_at = finished
                 state.last_cycle_result = RESULT_ERROR
                 state.last_error = code
@@ -202,7 +214,7 @@ class StrategyTwoRuntimeCoordinator:
                         finished_at=finished,
                         result=RESULT_ERROR,
                         error_code=code,
-                        notes_summary=f"phase:{phase}",
+                        notes_summary=f"phase:{phase}|error:{code}",
                     )
                 )
         finally:

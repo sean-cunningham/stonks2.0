@@ -30,6 +30,53 @@ _COOLDOWN_AFTER_ANY_TRADE_MIN = 10
 _COOLDOWN_AFTER_LOSS_MIN = 20
 
 
+def _fmt_num(v: object, places: int = 4) -> str | None:
+    if not isinstance(v, (int, float)):
+        return None
+    return f"{float(v):.{places}f}"
+
+
+def _build_no_trade_diagnostic_note(evaluation) -> str:
+    """Compact no-trade summary for runtime cycle notes."""
+    diag = getattr(evaluation, "diagnostics", None)
+    near_miss = getattr(diag, "near_miss", {}) if diag is not None else {}
+    contract_gate = getattr(diag, "contract_gate", {}) if diag is not None else {}
+    primary = getattr(diag, "primary_failed_gate", None) if diag is not None else None
+    failed = getattr(diag, "failed_gates", None) if diag is not None else None
+    blockers = getattr(evaluation, "blockers", None) or []
+    parts: list[str] = ["no_trade", f"decision={getattr(evaluation, 'decision', 'no_trade')}"]
+    if primary:
+        parts.append(f"gate={primary}")
+    if blockers:
+        parts.append(f"blocker={str(blockers[0])}")
+    if isinstance(failed, list) and failed:
+        parts.append(f"failed={','.join(str(x) for x in failed[:3])}")
+    trig = near_miss.get("nearest_trigger_name")
+    if isinstance(trig, str) and trig:
+        parts.append(f"trigger={trig}")
+    dist = _fmt_num(near_miss.get("nearest_trigger_distance"), places=4)
+    if dist is not None:
+        parts.append(f"dist={dist}")
+    band = _fmt_num(near_miss.get("proximity_band"), places=4)
+    if band is not None:
+        parts.append(f"band={band}")
+    ret = _fmt_num(near_miss.get("current_1m_return_abs_pct"), places=6)
+    if ret is not None:
+        parts.append(f"ret1m={ret}/0.000800")
+    rng = _fmt_num(near_miss.get("current_1m_range_atr_ratio"), places=4)
+    if rng is not None:
+        parts.append(f"rangeAtr={rng}/0.4500")
+    vol = _fmt_num(near_miss.get("current_1m_volume_multiple"), places=4)
+    if vol is not None:
+        parts.append(f"relVol={vol}/1.7500")
+    if isinstance(contract_gate, dict):
+        c = contract_gate.get("eligible_0dte_contracts_for_side")
+        if isinstance(c, int):
+            parts.append(f"contracts={c}")
+    s = "|".join(parts)
+    return s[:420]
+
+
 def _append_affordability_details_note(notes: list[str], details: dict | None) -> None:
     if not details:
         return
@@ -233,6 +280,7 @@ def run_strategy_two_paper_entry_once(
     evaluation, mstatus, chain = build_strategy_two_evaluation_bundle(context, market, settings)
     if evaluation.decision == "no_trade":
         notes.append("entry_evaluator_no_trade_candidate")
+        notes.append(_build_no_trade_diagnostic_note(evaluation))
         return StrategyTwoExecuteOnceResponse(
             cycle_action="no_action",
             had_open_position_at_start=False,
