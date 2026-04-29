@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     STRATEGY2_PAPER_RUNTIME_ENABLED: bool = False
     STRATEGY2_PAPER_ENTRY_INTERVAL_SECONDS: int = 5
     STRATEGY2_PAPER_EXIT_INTERVAL_SECONDS: int = 2
+    # Paper Strategy 3 — 0DTE micro impulse profile with independent runtime cadences.
+    PAPER_STRATEGY3_ACCOUNT_EQUITY_USD: float = 5000.0
+    STRATEGY3_PAPER_RUNTIME_ENABLED: bool = False
+    STRATEGY3_PAPER_ENTRY_INTERVAL_SECONDS: int = 2
+    STRATEGY3_PAPER_EXIT_INTERVAL_SECONDS: int = 1
 
     # Comma-separated browser origins allowed for CORS (local Vite dev server, etc.).
     CORS_ALLOW_ORIGINS: str = "http://127.0.0.1:5173,http://localhost:5173"

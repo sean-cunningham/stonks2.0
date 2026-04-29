@@ -11,6 +11,7 @@ from app.api.health import get_health
 from app.api.market import router as market_router
 from app.api.paper_runtime import router as paper_runtime_router
 from app.api.paper_strategy_one import router as paper_strategy_one_router
+from app.api.paper_strategy_three import router as paper_strategy_three_router
 from app.api.paper_strategy_two import router as paper_strategy_two_router
 from app.api.strategy_one import router as strategy_one_router
 from app.api.strategy_two import router as strategy_two_router
@@ -30,6 +31,7 @@ from app.core.logging import configure_logging
 from app.jobs.context_refresh import run_startup_context_refresh
 from app.jobs.market_refresh import run_startup_market_refresh
 from app.jobs.strategy_one_runtime_scheduler import StrategyOneRuntimeScheduler
+from app.jobs.strategy_three_runtime_scheduler import StrategyThreeRuntimeScheduler
 from app.jobs.strategy_two_runtime_scheduler import StrategyTwoRuntimeScheduler
 from app.schemas.health import HealthResponse
 from app.schemas.system import ConfigResponse, StrategiesResponse, SystemStatusResponse
@@ -64,10 +66,13 @@ async def lifespan(app: FastAPI):
     run_startup_context_refresh(s)
     strategy_one_runtime_scheduler = StrategyOneRuntimeScheduler(s)
     strategy_two_runtime_scheduler = StrategyTwoRuntimeScheduler(s)
+    strategy_three_runtime_scheduler = StrategyThreeRuntimeScheduler(s)
     strategy_one_runtime_scheduler.start()
     strategy_two_runtime_scheduler.start()
+    strategy_three_runtime_scheduler.start()
     logger.info("Strategy 1 evaluation and narrow paper-trade persistence are available; live order routing is not implemented.")
     yield
+    strategy_three_runtime_scheduler.stop()
     strategy_two_runtime_scheduler.stop()
     strategy_one_runtime_scheduler.stop()
     streamer.stop()
@@ -93,6 +98,7 @@ app.include_router(strategy_two_router)
 app.include_router(paper_runtime_router)
 app.include_router(paper_strategy_one_router)
 app.include_router(paper_strategy_two_router)
+app.include_router(paper_strategy_three_router)
 
 
 @app.get("/health", response_model=HealthResponse)

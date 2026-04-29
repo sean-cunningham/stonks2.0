@@ -41,13 +41,13 @@ class PaperRuntimeApiTests(unittest.TestCase):
             self.assertEqual(paused.status_code, 200, paused.text)
             pb = paused.json()
             self.assertEqual(pb["action"], "pause_all")
-            self.assertEqual(len(pb["strategies"]), 2)
+            self.assertEqual(len(pb["strategies"]), 3)
             self.assertTrue(all(s["paused"] for s in pb["strategies"]))
 
             resumed = client.post("/paper/runtime/resume-all")
             self.assertEqual(resumed.status_code, 200, resumed.text)
             rb = resumed.json()
             self.assertEqual(rb["action"], "resume_all")
-            self.assertEqual(len(rb["strategies"]), 2)
+            self.assertEqual(len(rb["strategies"]), 3)
             self.assertTrue(all(not s["paused"] for s in rb["strategies"]))
 

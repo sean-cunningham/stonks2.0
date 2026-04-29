@@ -31,11 +31,14 @@ const SIMPLE_EXPLANATIONS: Record<string, string> = {
     "Looks for clean SPY continuation moves and trades with strict risk and exit rules.",
   "strategy-2":
     "Looks for fast SPY volatility impulse setups with tighter timing and quality checks.",
+  "strategy-3":
+    "Looks for rapid SPY micro-impulse breakouts and breakdowns for short-duration scalps.",
 };
 
 const STRATEGY_NAME_OVERRIDES: Record<string, string> = {
   strategy_1_spy_continuation: "SPY Trend Continuation",
   strategy_2_spy_0dte_vol_sniper: "SPY Fast Move Sniper (0DTE)",
+  strategy_3_spy_micro_impulse: "SPY Micro Impulse Scalper (0DTE)",
 };
 
 function mapCatalogIdToRouteId(id: string): string {

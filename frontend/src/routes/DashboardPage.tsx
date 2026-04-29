@@ -14,12 +14,14 @@ import {
 } from "../api/strategyDashboard";
 import { buildStrategy1ViewModel } from "../strategies/strategy1/buildViewModel";
 import { buildStrategy2ViewModel } from "../strategies/strategy2/buildViewModel";
+import { buildStrategy3ViewModel } from "../strategies/strategy3/buildViewModel";
 import type { DashboardResponse } from "../types/dashboard";
 
 const POLL_MS = 5000;
 const STRATEGY_NAME_OVERRIDES: Record<string, string> = {
   strategy_1_spy_continuation: "SPY Trend Continuation",
   strategy_2_spy_0dte_vol_sniper: "SPY Fast Move Sniper (0DTE)",
+  strategy_3_spy_micro_impulse: "SPY Micro Impulse Scalper (0DTE)",
 };
 
 /**
@@ -112,6 +114,9 @@ export default function DashboardPage() {
     }
     if (symbol.toLowerCase() === "spy" && strategyId === "strategy-2") {
       return buildStrategy2ViewModel(data);
+    }
+    if (symbol.toLowerCase() === "spy" && strategyId === "strategy-3") {
+      return buildStrategy3ViewModel(data);
     }
     return null;
   }, [data, strategyId, symbol]);

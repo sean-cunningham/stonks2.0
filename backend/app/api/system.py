@@ -27,6 +27,16 @@ def get_strategy_catalog() -> list[StrategyMeta]:
             universe=["SPY"],
             status="paper_runtime_available",
         ),
+        StrategyMeta(
+            id="strategy_3_spy_micro_impulse",
+            name="SPY Micro Impulse Scalper (0DTE)",
+            paper_only=True,
+            live_order_routing=False,
+            ai_enabled=False,
+            options_scope="long_calls_and_puts_only",
+            universe=["SPY"],
+            status="paper_runtime_available",
+        ),
     ]
 
 
@@ -49,6 +59,7 @@ def get_status() -> SystemStatusResponse:
         supported_strategies=[
             "strategy_1_spy_continuation",
             "strategy_2_spy_0dte_vol_sniper",
+            "strategy_3_spy_micro_impulse",
         ],
         note=(
             "Real SPY market data integration is enabled. Strategy evaluation and "
