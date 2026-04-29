@@ -49,6 +49,12 @@ class DxLinkStatusResponse(BaseModel):
     latest_raw_close: float | None = None
     latest_persisted_1m_bar_time: datetime | None = None
     latest_persisted_1m_close: float | None = None
+    quote_token_refresh_attempted: bool = False
+    quote_token_refresh_succeeded: bool = False
+    quote_token_refresh_failed: bool = False
+    dxlink_reconnect_after_auth_error: bool = False
+    dxlink_reconnect_succeeded: bool = False
+    dxlink_reconnect_failed: bool = False
 
 
 class PersistedBarDebug(BaseModel):
@@ -137,6 +143,12 @@ def dxlink_status(db: Session = Depends(get_db)) -> DxLinkStatusResponse:
         latest_raw_close=h.latest_raw_close,
         latest_persisted_1m_bar_time=p_time,
         latest_persisted_1m_close=p_close,
+        quote_token_refresh_attempted=h.quote_token_refresh_attempted,
+        quote_token_refresh_succeeded=h.quote_token_refresh_succeeded,
+        quote_token_refresh_failed=h.quote_token_refresh_failed,
+        dxlink_reconnect_after_auth_error=h.dxlink_reconnect_after_auth_error,
+        dxlink_reconnect_succeeded=h.dxlink_reconnect_succeeded,
+        dxlink_reconnect_failed=h.dxlink_reconnect_failed,
     )
 
 

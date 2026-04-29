@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from app.schemas.bars import BarRow
 from app.schemas.context import ContextStatusResponse, ContextSummaryResponse
 from app.schemas.market import ChainLatestResponse, MarketStatusResponse, NearAtmContract
+from app.services.market.spy_quote_buffer import get_spy_quote_buffer
 from app.services.strategy.strategy_two_spy_0dte_vol_sniper import StrategyTwoEvalInput, evaluate_strategy_two_spy_0dte_vol_sniper
 
 
@@ -141,6 +142,9 @@ def _chain(today_exp: str, spread_wide: bool = False) -> ChainLatestResponse:
 
 
 class StrategyTwoEvaluatorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        get_spy_quote_buffer()._samples.clear()  # noqa: SLF001 - test isolation
+
     def test_returns_candidate_when_trigger_speed_volume_and_quality_pass(self) -> None:
         today = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date().isoformat()
         inp = StrategyTwoEvalInput.from_api(
@@ -208,4 +212,35 @@ class StrategyTwoEvaluatorTests(unittest.TestCase):
         with patch("app.services.strategy.strategy_two_spy_0dte_vol_sniper._is_within_entry_window", return_value=True):
             out = evaluate_strategy_two_spy_0dte_vol_sniper(inp)
         self.assertEqual(out.decision, "no_trade")
+
+    def test_evaluation_includes_micro_diagnostics_when_buffer_has_data(self) -> None:
+        now = datetime.now(timezone.utc)
+        buffer = get_spy_quote_buffer()
+        buffer.append(timestamp=now - timedelta(seconds=35), price=500.00, source="quote_mid")
+        buffer.append(timestamp=now - timedelta(seconds=20), price=500.15, source="quote_mid")
+        buffer.append(timestamp=now, price=500.30, source="quote_mid")
+
+        today = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York")).date().isoformat()
+        inp = StrategyTwoEvalInput.from_api(
+            status=_status(),
+            summary=_summary(),
+            market=_market(),
+            chain=_chain(today),
+            bars_1m=_bars(speed=False, volume_ok=False),
+        )
+        with patch("app.services.strategy.strategy_two_spy_0dte_vol_sniper._is_within_entry_window", return_value=True):
+            out = evaluate_strategy_two_spy_0dte_vol_sniper(inp)
+
+        self.assertEqual(out.decision, "no_trade")
+        self.assertIsNotNone(out.diagnostics)
+        near_miss = (out.diagnostics.near_miss if out.diagnostics else {}) or {}
+        self.assertIn("micro_latest_price", near_miss)
+        self.assertIn("micro_sample_count", near_miss)
+        self.assertIn("micro_price_change_15s", near_miss)
+        self.assertIn("micro_price_change_30s", near_miss)
+        self.assertIn("micro_abs_price_change_15s", near_miss)
+        self.assertIn("micro_abs_price_change_30s", near_miss)
+        self.assertIn("micro_atr_fraction_30s", near_miss)
+        self.assertIn("micro_data_available_15s", near_miss)
+        self.assertIn("micro_data_available_30s", near_miss)
 

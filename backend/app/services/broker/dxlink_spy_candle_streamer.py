@@ -86,6 +86,12 @@ class DxLinkHealthSnapshot:
     latest_raw_close: float | None
     latest_persisted_1m_bar_time: datetime | None
     latest_persisted_1m_close: float | None
+    quote_token_refresh_attempted: bool = False
+    quote_token_refresh_succeeded: bool = False
+    quote_token_refresh_failed: bool = False
+    dxlink_reconnect_after_auth_error: bool = False
+    dxlink_reconnect_succeeded: bool = False
+    dxlink_reconnect_failed: bool = False
 
 
 @dataclass
@@ -122,6 +128,12 @@ class DxLinkSpyCandleStreamer:
     # Latest candle rows keyed by period start (time ms); trimmed to recent keys only.
     _debug_by_period_ms: dict[int, dict[str, Any]] = field(default_factory=dict, repr=False)
     _debug_max_periods: int = 256
+    _quote_token_refresh_attempted: bool = False
+    _quote_token_refresh_succeeded: bool = False
+    _quote_token_refresh_failed: bool = False
+    _dxlink_reconnect_after_auth_error: bool = False
+    _dxlink_reconnect_succeeded: bool = False
+    _dxlink_reconnect_failed: bool = False
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -165,6 +177,12 @@ class DxLinkSpyCandleStreamer:
                 latest_raw_close=latest_raw_close,
                 latest_persisted_1m_bar_time=persisted_t,
                 latest_persisted_1m_close=self._last_persisted_1m_close,
+                quote_token_refresh_attempted=self._quote_token_refresh_attempted,
+                quote_token_refresh_succeeded=self._quote_token_refresh_succeeded,
+                quote_token_refresh_failed=self._quote_token_refresh_failed,
+                dxlink_reconnect_after_auth_error=self._dxlink_reconnect_after_auth_error,
+                dxlink_reconnect_succeeded=self._dxlink_reconnect_succeeded,
+                dxlink_reconnect_failed=self._dxlink_reconnect_failed,
             )
 
     def _latest_raw_event_time_locked(self) -> datetime | None:
@@ -230,6 +248,24 @@ class DxLinkSpyCandleStreamer:
             self._connected = False
             self._subscribed = False
 
+    def _set_recovery_flags(
+        self,
+        *,
+        refresh_attempted: bool,
+        refresh_succeeded: bool,
+        refresh_failed: bool,
+        reconnect_attempted: bool,
+        reconnect_succeeded: bool,
+        reconnect_failed: bool,
+    ) -> None:
+        with self._state_lock:
+            self._quote_token_refresh_attempted = refresh_attempted
+            self._quote_token_refresh_succeeded = refresh_succeeded
+            self._quote_token_refresh_failed = refresh_failed
+            self._dxlink_reconnect_after_auth_error = reconnect_attempted
+            self._dxlink_reconnect_succeeded = reconnect_succeeded
+            self._dxlink_reconnect_failed = reconnect_failed
+
     def _thread_main(self) -> None:
         while not self._stop.is_set():
             try:
@@ -254,15 +290,76 @@ class DxLinkSpyCandleStreamer:
             self._set_error("missing_credentials")
             raise BrokerAuthError("missing_credentials")
 
+        self._set_recovery_flags(
+            refresh_attempted=False,
+            refresh_succeeded=False,
+            refresh_failed=False,
+            reconnect_attempted=False,
+            reconnect_succeeded=False,
+            reconnect_failed=False,
+        )
         access = auth.get_access_token()
         quote = auth.get_quote_token(access.access_token)
         with self._state_lock:
             self._quote_token_present = bool(quote.token)
             self._dxlink_url_present = bool(quote.dxlink_url)
             self._last_error = None
+        try:
+            await self._run_connected_session(quote.dxlink_url, quote.token)
+            return
+        except RuntimeError as exc:
+            if not self._is_auth_session_not_found(str(exc)):
+                raise
+            self._set_recovery_flags(
+                refresh_attempted=True,
+                refresh_succeeded=False,
+                refresh_failed=False,
+                reconnect_attempted=True,
+                reconnect_succeeded=False,
+                reconnect_failed=False,
+            )
+            logger.warning("DXLink candle auth-session failure; refreshing quote token and retrying once")
+            try:
+                access = auth.get_access_token()
+                quote = auth.get_quote_token(access.access_token)
+                with self._state_lock:
+                    self._quote_token_present = bool(quote.token)
+                    self._dxlink_url_present = bool(quote.dxlink_url)
+                self._set_recovery_flags(
+                    refresh_attempted=True,
+                    refresh_succeeded=True,
+                    refresh_failed=False,
+                    reconnect_attempted=True,
+                    reconnect_succeeded=False,
+                    reconnect_failed=False,
+                )
+                await self._run_connected_session(quote.dxlink_url, quote.token)
+                self._set_recovery_flags(
+                    refresh_attempted=True,
+                    refresh_succeeded=True,
+                    refresh_failed=False,
+                    reconnect_attempted=True,
+                    reconnect_succeeded=True,
+                    reconnect_failed=False,
+                )
+            except Exception as retry_exc:  # noqa: BLE001
+                self._set_recovery_flags(
+                    refresh_attempted=True,
+                    refresh_succeeded=False,
+                    refresh_failed=True,
+                    reconnect_attempted=True,
+                    reconnect_succeeded=False,
+                    reconnect_failed=True,
+                )
+                raise RuntimeError(
+                    "dxlink_auth_session_not_found|quote_token_refresh_attempted|"
+                    "quote_token_refresh_failed|dxlink_reconnect_after_auth_error|"
+                    f"dxlink_reconnect_failed:{retry_exc}"
+                ) from retry_exc
 
-        async with websockets.connect(quote.dxlink_url) as ws:
-            await self._dxlink_handshake_and_subscribe(ws, quote.token)
+    async def _run_connected_session(self, dxlink_url: str, quote_token: str) -> None:
+        async with websockets.connect(dxlink_url) as ws:
+            await self._dxlink_handshake_and_subscribe(ws, quote_token)
             with self._state_lock:
                 self._connected = True
                 self._subscribed = True
@@ -361,8 +458,16 @@ class DxLinkSpyCandleStreamer:
             if predicate(message):
                 return message
             if message.get("type") == "ERROR":
-                raise RuntimeError(message.get("message", "broker_error"))
+                msg = str(message.get("message", "broker_error"))
+                if "AuthException" in msg and "Session not found" in msg:
+                    raise RuntimeError(f"dxlink_auth_session_not_found:{msg}")
+                raise RuntimeError(msg)
         raise TimeoutError("dxlink_handshake_timeout")
+
+    @staticmethod
+    def _is_auth_session_not_found(reason: str) -> bool:
+        lowered = reason.lower()
+        return "dxlink_auth_session_not_found" in lowered or "session not found" in lowered
 
     async def _receive_loop(self, ws: Any) -> None:
         current: _MinuteBuffer | None = None

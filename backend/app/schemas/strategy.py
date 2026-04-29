@@ -61,7 +61,7 @@ class StrategyOneEvaluationDiagnostics(BaseModel):
     gate_pass: dict[str, bool] = Field(default_factory=dict)
     primary_failed_gate: str | None = None
     failed_gates: list[str] = Field(default_factory=list)
-    near_miss: dict[str, float | bool | str | None] = Field(default_factory=dict)
+    near_miss: dict[str, float | int | bool | str | None] = Field(default_factory=dict)
     contract_gate: dict[str, int | bool | None] = Field(default_factory=dict)
     explanation: str | None = None
 

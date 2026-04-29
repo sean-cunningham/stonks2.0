@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 import websockets
+from websockets.exceptions import ConnectionClosedError, InvalidStatus
 
 from app.core.config import Settings
 from app.services.broker.tastytrade_auth import BrokerAuthError, TastytradeAuthService
@@ -86,16 +87,37 @@ class TastytradeMarketDataService:
 
     def fetch_spy_quote(self) -> UnderlyingQuoteNormalized:
         """Fetch and normalize current SPY quote via DXLink."""
+        try:
+            return self._fetch_spy_quote_once()
+        except MarketDataError as exc:
+            if not self._is_auth_session_not_found(str(exc)):
+                raise
+            logger.warning("SPY quote auth-session failure; refreshing quote token and retrying once")
+            try:
+                quote = self._fetch_spy_quote_once()
+                quote.source_status = (
+                    "quote_token_refresh_attempted|quote_token_refresh_succeeded|"
+                    "dxlink_reconnect_after_auth_error|dxlink_reconnect_succeeded"
+                )
+                return quote
+            except MarketDataError as retry_exc:
+                raise MarketDataError(
+                    "dxlink_auth_session_not_found|quote_token_refresh_attempted|"
+                    "quote_token_refresh_failed|dxlink_reconnect_after_auth_error|"
+                    f"dxlink_reconnect_failed:{retry_exc}"
+                ) from retry_exc
+
+    def _fetch_spy_quote_once(self) -> UnderlyingQuoteNormalized:
         access = self._auth_service.get_access_token()
         quote_token = self._auth_service.get_quote_token(access.access_token)
         quote_map = self._fetch_quotes_via_dxlink(quote_token.dxlink_url, quote_token.token, ["SPY"])
         quote = quote_map.get("SPY")
         if not quote:
-            raise MarketDataError("quote_unavailable")
+            raise MarketDataError("quote_empty_or_symbol_mismatch")
         bid = self._to_float(quote.get("bid"))
         ask = self._to_float(quote.get("ask"))
         if bid is None and ask is None:
-            raise MarketDataError("quote_unavailable")
+            raise MarketDataError("quote_empty_bid_ask")
         mid = self._calc_mid(bid, ask)
         logger.info("SPY quote refresh success via DXLink")
         return UnderlyingQuoteNormalized(
@@ -218,7 +240,11 @@ class TastytradeMarketDataService:
                 streamer_seen.add(st)
                 streamers_to_sub.append(st)
 
-        quote_map_raw = self._fetch_quotes_via_dxlink(quote_token.dxlink_url, quote_token.token, streamers_to_sub)
+        quote_map_raw = self._fetch_quotes_via_dxlink_with_auth_retry(
+            dxlink_url=quote_token.dxlink_url,
+            quote_token=quote_token.token,
+            symbols=streamers_to_sub,
+        )
         as_of = datetime.now(timezone.utc)
         out: dict[str, dict[str, float | str | None]] = {}
         for req in uniq:
@@ -310,7 +336,11 @@ class TastytradeMarketDataService:
 
         quote_symbols = [contract.streamer_symbol for contract in near_contracts]
         quote_token = self._auth_service.get_quote_token(access_token)
-        option_quotes = self._fetch_quotes_via_dxlink(quote_token.dxlink_url, quote_token.token, quote_symbols)
+        option_quotes = self._fetch_quotes_via_dxlink_with_auth_retry(
+            dxlink_url=quote_token.dxlink_url,
+            quote_token=quote_token.token,
+            symbols=quote_symbols,
+        )
         near_atm = self._merge_option_quotes(near_contracts, option_quotes)
 
         if not near_atm:
@@ -439,8 +469,24 @@ class TastytradeMarketDataService:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(coroutine)
+            return self._run_dxlink_coroutine(coroutine)
         return self._run_coroutine_in_thread(coroutine)
+
+    def _run_dxlink_coroutine(self, coroutine: Any) -> dict[str, dict[str, float | str | None]]:
+        try:
+            return asyncio.run(coroutine)
+        except MarketDataError:
+            raise
+        except TimeoutError as exc:
+            raise MarketDataError("dxlink_handshake_timeout") from exc
+        except InvalidStatus as exc:
+            raise MarketDataError(f"dxlink_invalid_status:{exc.status_code}") from exc
+        except ConnectionClosedError as exc:
+            raise MarketDataError(f"dxlink_connection_closed:{exc.code}") from exc
+        except OSError as exc:
+            raise MarketDataError(f"dxlink_connection_error:{type(exc).__name__}") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise MarketDataError(f"dxlink_unknown_error:{type(exc).__name__}") from exc
 
     @staticmethod
     def _run_coroutine_in_thread(coroutine: Any) -> dict[str, dict[str, float | str | None]]:
@@ -450,7 +496,7 @@ class TastytradeMarketDataService:
         def _runner() -> None:
             nonlocal result, error
             try:
-                result = asyncio.run(coroutine)
+                result = TastytradeMarketDataService._run_dxlink_coroutine_static(coroutine)
             except Exception as exc:  # noqa: BLE001
                 error = exc
 
@@ -460,6 +506,23 @@ class TastytradeMarketDataService:
         if error is not None:
             raise error
         return result
+
+    @staticmethod
+    def _run_dxlink_coroutine_static(coroutine: Any) -> dict[str, dict[str, float | str | None]]:
+        try:
+            return asyncio.run(coroutine)
+        except MarketDataError:
+            raise
+        except TimeoutError as exc:
+            raise MarketDataError("dxlink_handshake_timeout") from exc
+        except InvalidStatus as exc:
+            raise MarketDataError(f"dxlink_invalid_status:{exc.status_code}") from exc
+        except ConnectionClosedError as exc:
+            raise MarketDataError(f"dxlink_connection_closed:{exc.code}") from exc
+        except OSError as exc:
+            raise MarketDataError(f"dxlink_connection_error:{type(exc).__name__}") from exc
+        except Exception as exc:  # noqa: BLE001
+            raise MarketDataError(f"dxlink_unknown_error:{type(exc).__name__}") from exc
 
     async def _fetch_quotes_via_dxlink_async(
         self,
@@ -558,8 +621,35 @@ class TastytradeMarketDataService:
             if predicate(message):
                 return message
             if message.get("type") == "ERROR":
-                raise MarketDataError("broker_error")
-        raise MarketDataError("broker_error")
+                detail = str(message.get("message") or "unknown")
+                if "AuthException" in detail and "Session not found" in detail:
+                    raise MarketDataError(f"dxlink_auth_session_not_found:{detail}")
+                if "AuthException" in detail:
+                    raise MarketDataError(f"dxlink_auth_error:{detail}")
+                raise MarketDataError(f"dxlink_error:{detail}")
+        raise MarketDataError("dxlink_handshake_timeout")
+
+    def _fetch_quotes_via_dxlink_with_auth_retry(
+        self,
+        *,
+        dxlink_url: str,
+        quote_token: str,
+        symbols: list[str],
+    ) -> dict[str, dict[str, float | str | None]]:
+        try:
+            return self._fetch_quotes_via_dxlink(dxlink_url, quote_token, symbols)
+        except MarketDataError as exc:
+            if not self._is_auth_session_not_found(str(exc)):
+                raise
+            logger.warning("DXLink auth-session failure for quote fetch; refreshing token and retrying once")
+            access = self._auth_service.get_access_token()
+            fresh = self._auth_service.get_quote_token(access.access_token)
+            return self._fetch_quotes_via_dxlink(fresh.dxlink_url, fresh.token, symbols)
+
+    @staticmethod
+    def _is_auth_session_not_found(reason: str) -> bool:
+        lowered = reason.lower()
+        return "dxlink_auth_session_not_found" in lowered or "session not found" in lowered
 
     @staticmethod
     def _parse_json_message(payload: str) -> dict[str, Any]:

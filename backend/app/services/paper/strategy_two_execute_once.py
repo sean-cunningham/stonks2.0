@@ -69,6 +69,15 @@ def _build_no_trade_diagnostic_note(evaluation) -> str:
     vol = _fmt_num(near_miss.get("current_1m_volume_multiple"), places=4)
     if vol is not None:
         parts.append(f"relVol={vol}/1.7500")
+    micro15 = _fmt_num(near_miss.get("micro_price_change_15s"), places=4)
+    if micro15 is not None:
+        parts.append(f"micro15={micro15}")
+    micro30 = _fmt_num(near_miss.get("micro_price_change_30s"), places=4)
+    if micro30 is not None:
+        parts.append(f"micro30={micro30}")
+    micro_atr30 = _fmt_num(near_miss.get("micro_atr_fraction_30s"), places=4)
+    if micro_atr30 is not None:
+        parts.append(f"microAtr30={micro_atr30}")
     if isinstance(contract_gate, dict):
         c = contract_gate.get("eligible_0dte_contracts_for_side")
         if isinstance(c, int):

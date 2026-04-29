@@ -15,6 +15,7 @@ from app.schemas.strategy import (
     StrategyOneEvaluationDiagnostics,
     StrategyOneEvaluationResponse,
 )
+from app.services.market.spy_quote_buffer import get_spy_quote_buffer
 
 STRATEGY2_ID = "strategy_2_spy_0dte_vol_sniper"
 _ET = ZoneInfo("America/New_York")
@@ -212,6 +213,18 @@ def evaluate_strategy_two_spy_0dte_vol_sniper(inp: StrategyTwoEvalInput) -> Stra
     near_miss: dict[str, float | bool | str | None] = {}
     contract_gate: dict[str, int | bool | None] = {}
     primary_failed_gate: str | None = None
+    micro = get_spy_quote_buffer().get_micro_snapshot(
+        atr_5m=float(inp.summary.latest_5m_atr) if inp.summary.latest_5m_atr is not None else None
+    )
+    near_miss["micro_latest_price"] = micro.get("latest_price")
+    near_miss["micro_sample_count"] = micro.get("sample_count")
+    near_miss["micro_price_change_15s"] = micro.get("price_change_15s")
+    near_miss["micro_price_change_30s"] = micro.get("price_change_30s")
+    near_miss["micro_abs_price_change_15s"] = micro.get("abs_price_change_15s")
+    near_miss["micro_abs_price_change_30s"] = micro.get("abs_price_change_30s")
+    near_miss["micro_atr_fraction_30s"] = micro.get("atr_fraction_30s")
+    near_miss["micro_data_available_15s"] = micro.get("data_available_15s")
+    near_miss["micro_data_available_30s"] = micro.get("data_available_30s")
 
     def fail(gate: str, blocker: str, explanation: str) -> StrategyOneEvaluationResponse:
         failed = [name for name, passed in gate_pass.items() if not passed]

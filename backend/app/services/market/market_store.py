@@ -18,6 +18,7 @@ from app.services.broker.tastytrade_market_data import (
     UnderlyingQuoteNormalized,
 )
 from app.services.market.market_status import compute_market_readiness
+from app.services.market.spy_quote_buffer import get_spy_quote_buffer
 from app.services.paper.held_option_contract_resolution import (
     HeldOptionContractResolution,
     build_near_atm_contract_for_held_direct_quote,
@@ -69,19 +70,35 @@ class MarketStoreService:
         try:
             quote = self._market_data.fetch_spy_quote()
             quote_ok = True
+            if quote.mid is not None:
+                get_spy_quote_buffer().append(
+                    timestamp=quote.quote_timestamp,
+                    price=float(quote.mid),
+                    source="quote_mid",
+                )
+            elif quote.last is not None:
+                get_spy_quote_buffer().append(
+                    timestamp=quote.quote_timestamp,
+                    price=float(quote.last),
+                    source="quote_last",
+                )
         except (BrokerAuthError, MarketDataError) as exc:
             quote_reason = str(exc)
-            logger.warning("SPY quote refresh failed: reason=%s", quote_reason)
+            logger.warning("SPY quote refresh failed stage=fetch_spy_quote reason=%s", quote_reason)
 
         reference_price = quote.mid if quote and quote.mid is not None else quote.last if quote else None
-        try:
-            chain = self._market_data.fetch_spy_option_chain(reference_price)
-            chain_ok = chain.quote_data_available
-            if not chain.quote_data_available:
-                chain_reason = "chain_quotes_unavailable"
-        except (BrokerAuthError, MarketDataError) as exc:
-            chain_reason = str(exc)
-            logger.warning("SPY chain refresh failed: reason=%s", chain_reason)
+        if reference_price is None:
+            chain_reason = "chain_skipped_missing_reference_price"
+            logger.warning("SPY chain refresh skipped: reason=%s", chain_reason)
+        else:
+            try:
+                chain = self._market_data.fetch_spy_option_chain(reference_price)
+                chain_ok = chain.quote_data_available
+                if not chain.quote_data_available:
+                    chain_reason = "option_quote_enrichment_empty"
+            except (BrokerAuthError, MarketDataError) as exc:
+                chain_reason = str(exc)
+                logger.warning("SPY chain refresh failed stage=fetch_spy_option_chain reason=%s", chain_reason)
 
         now = datetime.now(timezone.utc)
         source_status = self._build_source_status(
