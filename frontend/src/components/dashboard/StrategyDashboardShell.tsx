@@ -17,8 +17,8 @@ type Props = {
   selectedStrategyId: string;
   actionBusy: boolean;
   onStrategyChange: (strategyId: string) => void;
+  onBackToStrategies: () => void;
   onPauseToggle: () => void;
-  onPauseAllToggle: () => void;
   onEntryToggle: () => void;
   onExitToggle: () => void;
   onResetStats: () => void;
@@ -33,8 +33,8 @@ export default function StrategyDashboardShell({
   selectedStrategyId,
   actionBusy,
   onStrategyChange,
+  onBackToStrategies,
   onPauseToggle,
-  onPauseAllToggle,
   onEntryToggle,
   onExitToggle,
   onResetStats,
@@ -47,6 +47,9 @@ export default function StrategyDashboardShell({
       <header className="page-header">
         <div>
           <h1>{vm.title}</h1>
+          <button className="link-button" onClick={onBackToStrategies}>
+            {"<- Back to Strategies"}
+          </button>
           <div className="muted">Last updated: {formatEasternDateTime(vm.asOf)}</div>
         </div>
         <div className="header-controls">
@@ -74,7 +77,6 @@ export default function StrategyDashboardShell({
         controls={vm.controls}
         disableActions={actionBusy}
         onPauseToggle={onPauseToggle}
-        onPauseAllToggle={onPauseAllToggle}
         onEntryToggle={onEntryToggle}
         onExitToggle={onExitToggle}
         onResetStats={onResetStats}

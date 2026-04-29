@@ -5,7 +5,6 @@ type Props = {
   controls: DashboardResponse["controls"];
   disableActions: boolean;
   onPauseToggle: () => void;
-  onPauseAllToggle: () => void;
   onEntryToggle: () => void;
   onExitToggle: () => void;
   onResetStats: () => void;
@@ -16,7 +15,6 @@ export default function RuntimeControlsPanel({
   controls,
   disableActions,
   onPauseToggle,
-  onPauseAllToggle,
   onEntryToggle,
   onExitToggle,
   onResetStats,
@@ -38,9 +36,6 @@ export default function RuntimeControlsPanel({
       <div className="actions">
         <button disabled={pauseDisabled} onClick={onPauseToggle} title={!controls.can_pause_resume ? "Not allowed by server" : undefined}>
           {runtime.paused ? "Resume" : "Pause"}
-        </button>
-        <button disabled={pauseDisabled} onClick={onPauseAllToggle} title={!controls.can_pause_resume ? "Not allowed by server" : undefined}>
-          {runtime.paused ? "Resume all" : "Pause all"}
         </button>
         <button
           disabled={entryDisabled}

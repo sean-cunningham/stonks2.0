@@ -4,7 +4,6 @@ import {
   fetchDashboard,
   fetchStrategyCatalog,
   setPause,
-  setPauseAll,
   type StrategyCatalogItem,
 } from "../api/strategyDashboard";
 import type { DashboardResponse } from "../types/dashboard";
@@ -32,6 +31,11 @@ const SIMPLE_EXPLANATIONS: Record<string, string> = {
     "Looks for clean SPY continuation moves and trades with strict risk and exit rules.",
   "strategy-2":
     "Looks for fast SPY volatility impulse setups with tighter timing and quality checks.",
+};
+
+const STRATEGY_NAME_OVERRIDES: Record<string, string> = {
+  strategy_1_spy_continuation: "SPY Trend Continuation",
+  strategy_2_spy_0dte_vol_sniper: "SPY Fast Move Sniper (0DTE)",
 };
 
 function mapCatalogIdToRouteId(id: string): string {
@@ -136,7 +140,6 @@ export default function StrategiesPage() {
   const [rows, setRows] = useState<StrategyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busyAll, setBusyAll] = useState(false);
   const [busyById, setBusyById] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
@@ -153,7 +156,7 @@ export default function StrategiesPage() {
           const row: StrategyRow = {
             catalogId: item.id,
             routeStrategyId,
-            name: item.name,
+            name: STRATEGY_NAME_OVERRIDES[item.id] ?? item.name,
             symbol,
             description: SIMPLE_EXPLANATIONS[routeStrategyId] ?? "Automated strategy with independent runtime controls.",
             health,
@@ -187,20 +190,6 @@ export default function StrategiesPage() {
     return () => clearInterval(timer);
   }, [load]);
 
-  const allPaused = useMemo(() => rows.length > 0 && rows.every((r) => r.paused), [rows]);
-
-  const onPauseAllToggle = useCallback(async () => {
-    try {
-      setBusyAll(true);
-      await setPauseAll(!allPaused);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAll(false);
-    }
-  }, [allPaused, load]);
-
   const onPauseToggle = useCallback(
     async (row: StrategyRow) => {
       try {
@@ -223,9 +212,6 @@ export default function StrategiesPage() {
           <h1>Strategies</h1>
           <div className="muted">Overview of active paper strategies and runtime controls.</div>
         </div>
-        <button onClick={() => void onPauseAllToggle()} disabled={busyAll || loading || rows.length === 0}>
-          {allPaused ? "Resume All" : "Pause All"}
-        </button>
       </header>
 
       {error && <div className="error-strip">Action failed: {error}</div>}
@@ -277,7 +263,7 @@ export default function StrategiesPage() {
                 <td>
                   <button
                     onClick={() => void onPauseToggle(row)}
-                    disabled={Boolean(busyById[row.catalogId]) || busyAll}
+                    disabled={Boolean(busyById[row.catalogId])}
                   >
                     {row.paused ? "Resume" : "Pause"}
                   </button>

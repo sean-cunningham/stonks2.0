@@ -9,7 +9,6 @@ import {
   resetDashboardStats,
   setEntryEnabled,
   setExitEnabled,
-  setPauseAll,
   setPause,
   type StrategyCatalogItem,
 } from "../api/strategyDashboard";
@@ -18,6 +17,10 @@ import { buildStrategy2ViewModel } from "../strategies/strategy2/buildViewModel"
 import type { DashboardResponse } from "../types/dashboard";
 
 const POLL_MS = 5000;
+const STRATEGY_NAME_OVERRIDES: Record<string, string> = {
+  strategy_1_spy_continuation: "SPY Trend Continuation",
+  strategy_2_spy_0dte_vol_sniper: "SPY Fast Move Sniper (0DTE)",
+};
 
 /**
  * Poll every `intervalMs` only while the document is visible; clear the interval while hidden.
@@ -137,7 +140,7 @@ export default function DashboardPage() {
     };
     return catalog
       .filter((s) => s.universe.some((u) => u.toUpperCase() === symbolUpper))
-      .map((s) => ({ label: s.name, value: mapCatalogIdToRouteId(s.id) }));
+      .map((s) => ({ label: STRATEGY_NAME_OVERRIDES[s.id] ?? s.name, value: mapCatalogIdToRouteId(s.id) }));
   }, [catalog, symbol]);
 
   if (fetchError && !data) {
@@ -157,8 +160,8 @@ export default function DashboardPage() {
         selectedStrategyId={strategyId}
         actionBusy={busy}
         onStrategyChange={(nextStrategyId) => navigate(`/paper/strategy/${symbol}/${nextStrategyId}`)}
+        onBackToStrategies={() => navigate("/paper/strategies")}
         onPauseToggle={() => runAction(() => setPause(symbol, strategyId, !vm.runtime.paused))}
-        onPauseAllToggle={() => runAction(() => setPauseAll(!vm.runtime.paused))}
         onEntryToggle={() => runAction(() => setEntryEnabled(symbol, strategyId, !vm.runtime.entry_enabled))}
         onExitToggle={() => runAction(() => setExitEnabled(symbol, strategyId, !vm.runtime.exit_enabled))}
         onResetStats={() => {

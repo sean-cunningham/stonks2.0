@@ -31,6 +31,16 @@ body {
   gap: 8px;
 }
 
+.link-button {
+  background: transparent;
+  color: #93c5fd;
+  border: none;
+  padding: 0;
+  margin: 4px 0 0;
+  font-size: 13px;
+  text-decoration: underline;
+}
+
 .strategy-select {
   margin-left: 8px;
   background: #0f172a;
