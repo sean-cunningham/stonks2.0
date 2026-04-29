@@ -9,7 +9,7 @@ def get_strategy_catalog() -> list[StrategyMeta]:
     return [
         StrategyMeta(
             id="strategy_1_spy_continuation",
-            name="Strategy 1 Lite - SPY Continuation",
+            name="SPY Trend Continuation",
             paper_only=True,
             live_order_routing=False,
             ai_enabled=False,
@@ -19,7 +19,7 @@ def get_strategy_catalog() -> list[StrategyMeta]:
         ),
         StrategyMeta(
             id="strategy_2_spy_0dte_vol_sniper",
-            name="SPY 0DTE Volatility Sniper",
+            name="SPY Fast Move Sniper (0DTE)",
             paper_only=True,
             live_order_routing=False,
             ai_enabled=False,

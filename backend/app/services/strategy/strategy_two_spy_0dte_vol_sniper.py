@@ -1,4 +1,4 @@
-"""Read-only Strategy 2 SPY 0DTE volatility sniper evaluator (deterministic)."""
+"""Read-only SPY Fast Move Sniper (0DTE) evaluator (deterministic)."""
 
 from __future__ import annotations
 

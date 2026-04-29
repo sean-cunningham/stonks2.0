@@ -47,7 +47,7 @@ class StrategyTwoDashboardApiTests(unittest.TestCase):
             as_of_timestamp=now,
             strategy=StrategyIdentity(
                 strategy_id="strategy_2_spy_0dte_vol_sniper",
-                strategy_name="SPY 0DTE Volatility Sniper",
+                strategy_name="SPY Fast Move Sniper (0DTE)",
                 symbol_scope=["SPY"],
             ),
             runtime=StrategyRuntimeView(

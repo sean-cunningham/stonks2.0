@@ -321,7 +321,7 @@ def build_strategy_one_dashboard(
         as_of_timestamp=as_of,
         strategy=StrategyIdentity(
             strategy_id=strategy_id,
-            strategy_name="Strategy 1 - SPY",
+            strategy_name="SPY Trend Continuation",
             symbol_scope=["SPY"],
             paper_only=True,
         ),

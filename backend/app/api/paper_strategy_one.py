@@ -1,4 +1,4 @@
-"""Paper trading API for Strategy 1 SPY — persistence only; no broker routing."""
+"""Paper trading API for SPY Trend Continuation — persistence only; no broker routing."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Paper trading API for Strategy 2 SPY 0DTE Volatility Sniper."""
+"""Paper trading API for SPY Fast Move Sniper (0DTE)."""
 
 from __future__ import annotations
 

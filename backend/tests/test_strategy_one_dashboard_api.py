@@ -47,7 +47,7 @@ class StrategyOneDashboardApiTests(unittest.TestCase):
             as_of_timestamp=now,
             strategy=StrategyIdentity(
                 strategy_id="strategy_1_spy",
-                strategy_name="Strategy 1 - SPY",
+                strategy_name="SPY Trend Continuation",
                 symbol_scope=["SPY"],
             ),
             runtime=StrategyRuntimeView(

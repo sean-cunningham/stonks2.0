@@ -1,4 +1,4 @@
-"""Read-only Strategy 2 (SPY 0DTE vol sniper) API."""
+"""Read-only API for SPY Fast Move Sniper (0DTE)."""
 
 from __future__ import annotations
 

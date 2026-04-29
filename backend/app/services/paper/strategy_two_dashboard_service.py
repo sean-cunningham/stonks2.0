@@ -205,7 +205,7 @@ def build_strategy_two_dashboard(
         as_of_timestamp=as_of,
         strategy=StrategyIdentity(
             strategy_id=strategy_id,
-            strategy_name="SPY 0DTE Volatility Sniper",
+            strategy_name="SPY Fast Move Sniper (0DTE)",
             symbol_scope=["SPY"],
             paper_only=True,
         ),
