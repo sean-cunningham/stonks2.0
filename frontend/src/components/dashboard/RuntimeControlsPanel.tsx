@@ -34,7 +34,6 @@ export default function RuntimeControlsPanel({
         <div>Paused: {runtime.paused ? "Yes" : "No"}</div>
         <div>New entries: {runtime.entry_enabled ? "Allowed" : "Blocked"}</div>
         <div>Automatic exits: {runtime.exit_enabled ? "Allowed" : "Blocked"}</div>
-        <div>Cycle in progress: {runtime.running ? "Yes" : "No"}</div>
       </div>
       <div className="actions">
         <button disabled={pauseDisabled} onClick={onPauseToggle} title={!controls.can_pause_resume ? "Not allowed by server" : undefined}>

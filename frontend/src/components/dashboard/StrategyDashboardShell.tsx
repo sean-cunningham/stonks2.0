@@ -10,7 +10,6 @@ import ClosedTradesTable from "./ClosedTradesTable";
 import CycleHistoryTable from "./CycleHistoryTable";
 import LimitationsPanel from "./LimitationsPanel";
 import StrategyDetailsPanel from "./StrategyDetailsPanel";
-import SignalBlockerPanel from "./SignalBlockerPanel";
 
 type Props = {
   vm: StrategyDashboardViewModel;
@@ -69,9 +68,7 @@ export default function StrategyDashboardShell({
         </div>
       </header>
 
-      <SignalBlockerPanel signal={vm.currentSignal} cycleSummary={vm.cycleSummary} />
-
-      <RuntimeHealthBanner runtime={vm.runtime} limitations={vm.limitations} />
+      <RuntimeHealthBanner runtime={vm.runtime} limitations={vm.limitations} strategyDetails={vm.strategyDetails} />
       <RuntimeControlsPanel
         runtime={vm.runtime}
         controls={vm.controls}
